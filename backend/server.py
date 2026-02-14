@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import sqlite3
 import time
 import traceback
 from collections import defaultdict
@@ -248,85 +249,72 @@ class RequestHandler(BaseHTTPRequestHandler):
         path = parsed.path
         REQUEST_COUNTS[f"GET {path}"] += 1
 
-        if path == "/api/health":
-            _json_response(self, HTTPStatus.OK, {"ok": True, "service": "bs-user-summary"})
-            return
+        try:
+            if path == "/api/health":
+                _json_response(self, HTTPStatus.OK, {"ok": True, "service": "bs-user-summary"})
+                return
 
-        if path == "/api/llm/models":
-            query = parse_qs(parsed.query)
-            provider = str((query.get("provider") or ["auto"])[0]).strip().lower()
-            free_only = str((query.get("free_only") or ["false"])[0]).strip().lower() in {"1", "true", "yes"}
-            try:
-                models = list_available_models(provider=provider, free_only=free_only)
-                _json_response(self, HTTPStatus.OK, models)
-            except LLMUnavailableError as exc:
+            if path == "/api/llm/models":
+                query = parse_qs(parsed.query)
+                provider = str((query.get("provider") or ["auto"])[0]).strip().lower()
+                free_only = str((query.get("free_only") or ["false"])[0]).strip().lower() in {"1", "true", "yes"}
+                try:
+                    models = list_available_models(provider=provider, free_only=free_only)
+                    _json_response(self, HTTPStatus.OK, models)
+                except LLMUnavailableError as exc:
+                    _json_response(
+                        self,
+                        HTTPStatus.OK,
+                        {
+                            "provider": provider,
+                            "default_model": None,
+                            "models": [],
+                            "error": str(exc),
+                        },
+                    )
+                return
+
+            if path == "/api/stats":
+                now = int(time.time())
                 _json_response(
                     self,
                     HTTPStatus.OK,
                     {
-                        "provider": provider,
-                        "default_model": None,
-                        "models": [],
-                        "error": str(exc),
+                        "uptime_seconds": now - START_TIME,
+                        "started_at": START_TIME,
+                        "job_counts": STORAGE.get_job_status_counts(),
+                        "cache_entries": STORAGE.get_cache_count(),
+                        "request_counts": dict(sorted(REQUEST_COUNTS.items())),
                     },
                 )
-            return
-
-        if path == "/api/stats":
-            now = int(time.time())
-            _json_response(
-                self,
-                HTTPStatus.OK,
-                {
-                    "uptime_seconds": now - START_TIME,
-                    "started_at": START_TIME,
-                    "job_counts": STORAGE.get_job_status_counts(),
-                    "cache_entries": STORAGE.get_cache_count(),
-                    "request_counts": dict(sorted(REQUEST_COUNTS.items())),
-                },
-            )
-            return
-
-        if path.startswith("/api/jobs/"):
-            job_id_text = path.removeprefix("/api/jobs/")
-            if not job_id_text.isdigit():
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                 return
-            job = STORAGE.get_job(int(job_id_text))
-            if job is None:
-                _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job not found"})
-                return
-            _json_response(
-                self,
-                HTTPStatus.OK,
-                {
-                    "id": job.id,
-                    "handle": job.handle,
-                    "status": job.status,
-                    "created_at": job.created_at,
-                    "updated_at": job.updated_at,
-                    "error": job.error,
-                    "progress": job.progress,
-                },
-            )
-            return
 
-        if path.startswith("/api/summary/"):
-            job_id_text = path.removeprefix("/api/summary/")
-            if not job_id_text.isdigit():
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
+            if path.startswith("/api/jobs/"):
+                job_id_text = path.removeprefix("/api/jobs/")
+                if not job_id_text.isdigit():
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
+                    return
+                job = STORAGE.get_job(int(job_id_text))
+                if job is None:
+                    _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job not found"})
+                    return
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "id": job.id,
+                        "handle": job.handle,
+                        "status": job.status,
+                        "created_at": job.created_at,
+                        "updated_at": job.updated_at,
+                        "error": job.error,
+                        "progress": job.progress,
+                    },
+                )
                 return
-            summary = STORAGE.get_summary(int(job_id_text))
-            if summary is None:
-                _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
-                return
-            _json_response(self, HTTPStatus.OK, summary)
-            return
 
-        if path.startswith("/api/export/"):
-            suffix = path.removeprefix("/api/export/")
-            if suffix.endswith(".json"):
-                job_id_text = suffix[: -len(".json")]
+            if path.startswith("/api/summary/"):
+                job_id_text = path.removeprefix("/api/summary/")
                 if not job_id_text.isdigit():
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                     return
@@ -336,119 +324,143 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 _json_response(self, HTTPStatus.OK, summary)
                 return
-            if suffix.endswith(".md"):
-                job_id_text = suffix[: -len(".md")]
-                if not job_id_text.isdigit():
-                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
+
+            if path.startswith("/api/export/"):
+                suffix = path.removeprefix("/api/export/")
+                if suffix.endswith(".json"):
+                    job_id_text = suffix[: -len(".json")]
+                    if not job_id_text.isdigit():
+                        _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
+                        return
+                    summary = STORAGE.get_summary(int(job_id_text))
+                    if summary is None:
+                        _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
+                        return
+                    _json_response(self, HTTPStatus.OK, summary)
                     return
-                summary = STORAGE.get_summary(int(job_id_text))
-                if summary is None:
-                    _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
+                if suffix.endswith(".md"):
+                    job_id_text = suffix[: -len(".md")]
+                    if not job_id_text.isdigit():
+                        _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
+                        return
+                    summary = STORAGE.get_summary(int(job_id_text))
+                    if summary is None:
+                        _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
+                        return
+                    report_md = _summary_to_markdown(summary)
+                    _text_response(self, HTTPStatus.OK, report_md, "text/markdown; charset=utf-8")
                     return
-                report_md = _summary_to_markdown(summary)
-                _text_response(self, HTTPStatus.OK, report_md, "text/markdown; charset=utf-8")
+
+            if path == "/api/user/raw":
+                query = parse_qs(parsed.query)
+                handle = _normalize_handle((query.get("handle") or [""])[0])
+                if not handle:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Missing handle"})
+                    return
+                raw_data = STORAGE.get_raw_for_handle(handle)
+                if raw_data is None:
+                    _json_response(self, HTTPStatus.NOT_FOUND, {"error": "No cached data for handle"})
+                    return
+                _json_response(self, HTTPStatus.OK, raw_data)
                 return
 
-        if path == "/api/user/raw":
-            query = parse_qs(parsed.query)
-            handle = _normalize_handle((query.get("handle") or [""])[0])
-            if not handle:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Missing handle"})
-                return
-            raw_data = STORAGE.get_raw_for_handle(handle)
-            if raw_data is None:
-                _json_response(self, HTTPStatus.NOT_FOUND, {"error": "No cached data for handle"})
-                return
-            _json_response(self, HTTPStatus.OK, raw_data)
+            self._serve_frontend(path)
+        except sqlite3.OperationalError as exc:
+            LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
+            _json_response(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Temporary database access failure"})
             return
-
-        self._serve_frontend(path)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
         REQUEST_COUNTS[f"POST {path}"] += 1
 
-        if path == "/api/analyze":
-            try:
-                body = _read_json_body(self)
-            except json.JSONDecodeError:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON body"})
+        try:
+            if path == "/api/analyze":
+                try:
+                    body = _read_json_body(self)
+                except json.JSONDecodeError:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON body"})
+                    return
+
+                handle = _normalize_handle(str(body.get("handle") or ""))
+                if not handle:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "handle is required"})
+                    return
+
+                max_items = int(body.get("max_items") or 200)
+                max_items = max(25, min(max_items, 500))
+                use_cache = bool(body.get("use_cache", True))
+                cache_age_s = int(body.get("cache_age_seconds") or 900)
+                cache_age_s = max(60, min(cache_age_s, 86400))
+                comparison_window_days = int(body.get("comparison_window_days") or 30)
+                comparison_window_days = max(7, min(comparison_window_days, 90))
+                llm_enabled = bool(body.get("enable_llm", True))
+                llm_provider = str(body.get("llm_provider") or os.getenv("BS_LLM_PROVIDER", "auto")).strip().lower()
+                llm_model = str(body.get("llm_model") or os.getenv("BS_LLM_MODEL", "")).strip()
+                llm_max_posts = int(body.get("llm_max_posts") or os.getenv("BS_LLM_MAX_POSTS", "500"))
+                llm_max_posts = max(25, min(llm_max_posts, 500))
+
+                llm_options = {
+                    "enabled": llm_enabled,
+                    "provider": llm_provider,
+                    "model": llm_model,
+                    "max_posts": llm_max_posts,
+                }
+
+                job_id = STORAGE.create_job(handle=handle)
+                EXECUTOR.submit(
+                    _run_job,
+                    job_id,
+                    handle,
+                    max_items,
+                    use_cache,
+                    cache_age_s,
+                    comparison_window_days,
+                    llm_options,
+                )
+
+                _json_response(
+                    self,
+                    HTTPStatus.ACCEPTED,
+                    {
+                        "job_id": job_id,
+                        "status": "queued",
+                        "handle": handle,
+                        "comparison_window_days": comparison_window_days,
+                        "llm_enabled": llm_enabled,
+                        "llm_provider": llm_provider,
+                        "llm_model": llm_model or None,
+                    },
+                )
                 return
 
-            handle = _normalize_handle(str(body.get("handle") or ""))
-            if not handle:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "handle is required"})
+            if path == "/api/maintenance/cleanup":
+                try:
+                    body = _read_json_body(self)
+                except json.JSONDecodeError:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON body"})
+                    return
+
+                max_age_days = int(body.get("max_age_days") or 30)
+                max_age_days = max(1, min(max_age_days, 365))
+                cleanup = STORAGE.cleanup_old_data(max_age_seconds=max_age_days * 86400)
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "max_age_days": max_age_days,
+                        **cleanup,
+                    },
+                )
                 return
 
-            max_items = int(body.get("max_items") or 200)
-            max_items = max(25, min(max_items, 500))
-            use_cache = bool(body.get("use_cache", True))
-            cache_age_s = int(body.get("cache_age_seconds") or 900)
-            cache_age_s = max(60, min(cache_age_s, 86400))
-            comparison_window_days = int(body.get("comparison_window_days") or 30)
-            comparison_window_days = max(7, min(comparison_window_days, 90))
-            llm_enabled = bool(body.get("enable_llm", True))
-            llm_provider = str(body.get("llm_provider") or os.getenv("BS_LLM_PROVIDER", "auto")).strip().lower()
-            llm_model = str(body.get("llm_model") or os.getenv("BS_LLM_MODEL", "")).strip()
-            llm_max_posts = int(body.get("llm_max_posts") or os.getenv("BS_LLM_MAX_POSTS", "500"))
-            llm_max_posts = max(25, min(llm_max_posts, 500))
-
-            llm_options = {
-                "enabled": llm_enabled,
-                "provider": llm_provider,
-                "model": llm_model,
-                "max_posts": llm_max_posts,
-            }
-
-            job_id = STORAGE.create_job(handle=handle)
-            EXECUTOR.submit(
-                _run_job,
-                job_id,
-                handle,
-                max_items,
-                use_cache,
-                cache_age_s,
-                comparison_window_days,
-                llm_options,
-            )
-
-            _json_response(
-                self,
-                HTTPStatus.ACCEPTED,
-                {
-                    "job_id": job_id,
-                    "status": "queued",
-                    "handle": handle,
-                    "comparison_window_days": comparison_window_days,
-                    "llm_enabled": llm_enabled,
-                    "llm_provider": llm_provider,
-                    "llm_model": llm_model or None,
-                },
-            )
+            _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
-
-        if path == "/api/maintenance/cleanup":
-            try:
-                body = _read_json_body(self)
-            except json.JSONDecodeError:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON body"})
-                return
-
-            max_age_days = int(body.get("max_age_days") or 30)
-            max_age_days = max(1, min(max_age_days, 365))
-            cleanup = STORAGE.cleanup_old_data(max_age_seconds=max_age_days * 86400)
-            _json_response(
-                self,
-                HTTPStatus.OK,
-                {
-                    "max_age_days": max_age_days,
-                    **cleanup,
-                },
-            )
+        except sqlite3.OperationalError as exc:
+            LOGGER.error("SQLite operation failed during POST %s: %s", path, exc)
+            _json_response(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Temporary database access failure"})
             return
-
-        _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Not found"})
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         LOGGER.info("%s - %s", self.address_string(), fmt % args)

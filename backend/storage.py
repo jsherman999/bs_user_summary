@@ -23,15 +23,26 @@ class JobRecord:
 
 class Storage:
     def __init__(self, db_path: str = "data/app.db") -> None:
-        self.db_path = Path(db_path)
+        self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(1, 4):
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn.row_factory = sqlite3.Row
+                return conn
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                # Retry transient open failures before bubbling up.
+                time.sleep(0.05 * attempt)
+        if last_error is not None:
+            raise last_error
+        raise sqlite3.OperationalError("unable to open database file")
 
     def _init_db(self) -> None:
         with self._connect() as conn:
