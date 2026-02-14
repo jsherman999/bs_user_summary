@@ -27,7 +27,11 @@ const errorText = document.getElementById("error-text");
 
 let currentJobId = null;
 const POLL_INTERVAL_MS = 900;
-const MAX_TRANSIENT_POLL_ERRORS = 20;
+const MAX_TRANSIENT_POLL_ERRORS = 240;
+const MAX_TRANSIENT_WAIT_MS = 10000;
+const MAX_SUMMARY_FETCH_RETRIES = 60;
+const LAST_JOB_ID_KEY = "bs_user_summary:last_job_id";
+const LAST_JOB_HANDLE_KEY = "bs_user_summary:last_job_handle";
 
 function setHidden(el, hidden) {
   if (hidden) {
@@ -50,6 +54,16 @@ function resetView() {
 function showError(message) {
   setHidden(errorCard, false);
   errorText.textContent = message;
+}
+
+function saveActiveJob(jobId, handle) {
+  localStorage.setItem(LAST_JOB_ID_KEY, String(jobId));
+  localStorage.setItem(LAST_JOB_HANDLE_KEY, handle || "");
+}
+
+function clearActiveJob() {
+  localStorage.removeItem(LAST_JOB_ID_KEY);
+  localStorage.removeItem(LAST_JOB_HANDLE_KEY);
 }
 
 function formatPct(value) {
@@ -271,6 +285,23 @@ function isTransientPollError(error) {
   );
 }
 
+async function fetchSummaryWithRetry(jobId) {
+  let retries = 0;
+  while (true) {
+    try {
+      return await getJson(`/api/summary/${jobId}`);
+    } catch (error) {
+      if (!isTransientPollError(error) || retries >= MAX_SUMMARY_FETCH_RETRIES) {
+        throw error;
+      }
+      retries += 1;
+      const waitMs = Math.min(MAX_TRANSIENT_WAIT_MS, 500 + retries * 350);
+      statusText.textContent = `[summary-retry] Temporary fetch issue (${retries}/${MAX_SUMMARY_FETCH_RETRIES}): ${error.message}`;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
 async function pollJob(jobId) {
   let transientFailures = 0;
   while (true) {
@@ -282,7 +313,7 @@ async function pollJob(jobId) {
     } catch (error) {
       if (isTransientPollError(error) && transientFailures < MAX_TRANSIENT_POLL_ERRORS) {
         transientFailures += 1;
-        const waitMs = Math.min(5000, 400 * transientFailures);
+        const waitMs = Math.min(MAX_TRANSIENT_WAIT_MS, 400 * transientFailures);
         statusText.textContent = `[poll-retry] Temporary fetch issue (${transientFailures}/${MAX_TRANSIENT_POLL_ERRORS}): ${error.message}`;
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         continue;
@@ -295,11 +326,89 @@ async function pollJob(jobId) {
     }
 
     if (job.status === "completed") {
-      const summary = await getJson(`/api/summary/${jobId}`);
+      const summary = await fetchSummaryWithRetry(jobId);
       return summary;
     }
 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+}
+
+function renderSummary(summary, jobId) {
+  setHidden(summaryCard, false);
+
+  exportJson.href = `/api/export/${jobId}.json`;
+  exportMd.href = `/api/export/${jobId}.md`;
+
+  summaryText.textContent = summary.summary_text || "No narrative summary available.";
+  renderMetrics(summary.metrics || {});
+  renderComparison(summary.comparison || null);
+
+  renderList(topicsList, summary.top_topics || [], (topic) => `${topic.topic}: ${topic.count}`);
+  renderList(termsList, summary.top_terms || [], (term) => `${term.term}: ${term.count}`);
+  renderList(
+    claimsList,
+    summary.claims || [],
+    (claim) => `${claim.text} (confidence ${claim.confidence}; evidence: ${(claim.evidence_ids || []).join(", ")})`,
+    "No grounded claims available."
+  );
+  renderLlmAssessment(summary.llm_assessment || null);
+  renderList(
+    takesList,
+    summary.takes || [],
+    (take) => `${take.statement} (confidence ${take.confidence}; mentions ${take.signal_count})`,
+    "No topic takes available from sampled content."
+  );
+  renderList(
+    uncertaintyList,
+    summary.uncertainty_notes || [],
+    (entry) => entry,
+    "No additional uncertainty notes."
+  );
+  renderList(honestyList, summary.honesty_notes || [], (entry) => entry, "");
+  renderEvidence(summary.evidence || []);
+}
+
+async function maybeResumePreviousJob(button) {
+  const savedJobId = Number(localStorage.getItem(LAST_JOB_ID_KEY) || 0);
+  if (!savedJobId || !Number.isInteger(savedJobId) || savedJobId <= 0) {
+    return;
+  }
+
+  const savedHandle = localStorage.getItem(LAST_JOB_HANDLE_KEY) || "";
+  if (savedHandle) {
+    document.getElementById("handle").value = savedHandle;
+  }
+
+  button.disabled = true;
+  resetView();
+  statusText.textContent = `[resume] Checking previous job ${savedJobId}...`;
+
+  try {
+    currentJobId = savedJobId;
+    const job = await getJson(`/api/jobs/${savedJobId}`);
+    updateStatusProgress(job);
+
+    if (job.status === "completed") {
+      const summary = await fetchSummaryWithRetry(savedJobId);
+      renderSummary(summary, savedJobId);
+      clearActiveJob();
+      return;
+    }
+
+    if (job.status === "failed") {
+      clearActiveJob();
+      showError(`Previous job ${savedJobId} failed: ${job.error || "Analysis failed"}`);
+      return;
+    }
+
+    const summary = await pollJob(savedJobId);
+    renderSummary(summary, savedJobId);
+    clearActiveJob();
+  } catch (error) {
+    showError(`Could not resume previous job ${savedJobId}: ${error.message || "Unexpected error."}`);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -334,42 +443,17 @@ form.addEventListener("submit", async (event) => {
       }),
     });
     currentJobId = start.job_id;
+    saveActiveJob(currentJobId, handle);
 
     const summary = await pollJob(currentJobId);
-    setHidden(summaryCard, false);
-
-    exportJson.href = `/api/export/${currentJobId}.json`;
-    exportMd.href = `/api/export/${currentJobId}.md`;
-
-    summaryText.textContent = summary.summary_text || "No narrative summary available.";
-    renderMetrics(summary.metrics || {});
-    renderComparison(summary.comparison || null);
-
-    renderList(topicsList, summary.top_topics || [], (topic) => `${topic.topic}: ${topic.count}`);
-    renderList(termsList, summary.top_terms || [], (term) => `${term.term}: ${term.count}`);
-    renderList(
-      claimsList,
-      summary.claims || [],
-      (claim) => `${claim.text} (confidence ${claim.confidence}; evidence: ${(claim.evidence_ids || []).join(", ")})`,
-      "No grounded claims available."
-    );
-    renderLlmAssessment(summary.llm_assessment || null);
-    renderList(
-      takesList,
-      summary.takes || [],
-      (take) => `${take.statement} (confidence ${take.confidence}; mentions ${take.signal_count})`,
-      "No topic takes available from sampled content."
-    );
-    renderList(
-      uncertaintyList,
-      summary.uncertainty_notes || [],
-      (entry) => entry,
-      "No additional uncertainty notes."
-    );
-    renderList(honestyList, summary.honesty_notes || [], (entry) => entry, "");
-    renderEvidence(summary.evidence || []);
+    renderSummary(summary, currentJobId);
+    clearActiveJob();
   } catch (error) {
-    showError(error.message || "Unexpected error.");
+    const message = error.message || "Unexpected error.";
+    const recoveryNote = currentJobId
+      ? ` Job ${currentJobId} may still be running. Reload to auto-resume.`
+      : "";
+    showError(`${message}${recoveryNote}`);
   } finally {
     button.disabled = false;
   }
@@ -380,3 +464,4 @@ llmProviderSelect.addEventListener("change", () => {
 });
 
 loadModelOptions();
+maybeResumePreviousJob(form.querySelector("button"));

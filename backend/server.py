@@ -369,6 +369,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
             _json_response(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Temporary database access failure"})
             return
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("Unhandled GET error for %s: %s\n%s", path, exc, traceback.format_exc())
+            _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal server error"})
+            return
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -460,6 +464,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         except sqlite3.OperationalError as exc:
             LOGGER.error("SQLite operation failed during POST %s: %s", path, exc)
             _json_response(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Temporary database access failure"})
+            return
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("Unhandled POST error for %s: %s\n%s", path, exc, traceback.format_exc())
+            _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal server error"})
             return
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003

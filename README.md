@@ -24,6 +24,7 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
   - LLM chunk stage details
   - `x/y` counters for posts/chunks analyzed
   - transient poll retry handling for temporary DB/network failures
+  - persisted job recovery (auto-resume on reload if a run is still in progress)
 - Adds time-window comparison (recent window vs prior window).
 - Supports summary export in JSON and Markdown formats.
 - Exposes observability stats and retention cleanup endpoints.

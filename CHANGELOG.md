@@ -7,6 +7,9 @@
 - Frontend LLM status now shows explicit fallback/model-fallback reason text.
 - Frontend job polling now auto-retries transient failures (`Temporary database access failure`, network fetch errors) instead of aborting analysis immediately.
 - SQLite connection handling now uses stronger retry/backoff + WAL/busy-timeout settings to reduce transient DB-open failures during heavy polling.
+- Frontend now persists active job ID and auto-resumes in-progress runs after reload, reducing lost progress after temporary LAN drops.
+- Polling now retries longer and also retries summary-fetch after completion to avoid late-stage `Failed to fetch` errors.
+- API handlers now return explicit JSON `500` for unexpected request errors instead of dropping the socket.
 
 ## [0.5.0] - 2026-02-14
 ### Added
