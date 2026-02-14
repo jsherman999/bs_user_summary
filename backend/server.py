@@ -390,6 +390,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                     return
                 job_id = int(job_id_text)
+                runtime_job = _runtime_get_job(job_id)
+                # Serve active runtime state first to avoid SQLite-open stalls during transient DB failures.
+                if runtime_job is not None:
+                    runtime_status = str(runtime_job.get("status") or "")
+                    if runtime_status in {"queued", "running", "completed", "failed"}:
+                        _json_response(self, HTTPStatus.OK, runtime_job)
+                        return
+
                 try:
                     job = STORAGE.get_job(job_id)
                 except sqlite3.OperationalError as exc:
@@ -412,7 +420,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                     )
                     return
 
-                runtime_job = _runtime_get_job(job_id)
                 if runtime_job is None:
                     _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job not found"})
                     return
@@ -425,13 +432,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                     return
                 job_id = int(job_id_text)
+                runtime_summary = _runtime_get_summary(job_id)
+                if runtime_summary is not None:
+                    _json_response(self, HTTPStatus.OK, runtime_summary)
+                    return
                 try:
                     summary = STORAGE.get_summary(job_id)
                 except sqlite3.OperationalError as exc:
                     LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
                     summary = None
-                if summary is None:
-                    summary = _runtime_get_summary(job_id)
                 if summary is None:
                     _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                     return
@@ -446,13 +455,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                         _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                         return
                     job_id = int(job_id_text)
+                    runtime_summary = _runtime_get_summary(job_id)
+                    if runtime_summary is not None:
+                        _json_response(self, HTTPStatus.OK, runtime_summary)
+                        return
                     try:
                         summary = STORAGE.get_summary(job_id)
                     except sqlite3.OperationalError as exc:
                         LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
                         summary = None
-                    if summary is None:
-                        summary = _runtime_get_summary(job_id)
                     if summary is None:
                         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                         return
@@ -464,13 +475,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                         _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                         return
                     job_id = int(job_id_text)
+                    runtime_summary = _runtime_get_summary(job_id)
+                    if runtime_summary is not None:
+                        report_md = _summary_to_markdown(runtime_summary)
+                        _text_response(self, HTTPStatus.OK, report_md, "text/markdown; charset=utf-8")
+                        return
                     try:
                         summary = STORAGE.get_summary(job_id)
                     except sqlite3.OperationalError as exc:
                         LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
                         summary = None
-                    if summary is None:
-                        summary = _runtime_get_summary(job_id)
                     if summary is None:
                         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                         return
