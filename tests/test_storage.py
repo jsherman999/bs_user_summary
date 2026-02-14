@@ -79,6 +79,31 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(job.progress["total"], 3)
             self.assertEqual(job.progress["meta"]["posts_total"], 60)
 
+    def test_mark_incomplete_jobs_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(db_path=str(Path(tmpdir) / "app.db"))
+            queued = storage.create_job("queued.bsky.social")
+            running = storage.create_job("running.bsky.social")
+            done = storage.create_job("done.bsky.social")
+            storage.update_job_status(running, "running")
+            storage.set_job_result(done, {"ok": True}, {"raw": True})
+
+            changed = storage.mark_incomplete_jobs_failed(reason="restart")
+            self.assertEqual(changed, 2)
+
+            queued_job = storage.get_job(queued)
+            running_job = storage.get_job(running)
+            done_job = storage.get_job(done)
+            self.assertIsNotNone(queued_job)
+            self.assertIsNotNone(running_job)
+            self.assertIsNotNone(done_job)
+            assert queued_job is not None
+            assert running_job is not None
+            assert done_job is not None
+            self.assertEqual(queued_job.status, "failed")
+            self.assertEqual(running_job.status, "failed")
+            self.assertEqual(done_job.status, "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

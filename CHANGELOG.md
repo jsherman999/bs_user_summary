@@ -11,6 +11,7 @@
 - Polling now retries longer and also retries summary-fetch after completion to avoid late-stage `Failed to fetch` errors.
 - API handlers now return explicit JSON `500` for unexpected request errors instead of dropping the socket.
 - Added in-memory runtime job/summary fallback for active jobs so `/api/jobs/{id}` and `/api/summary/{id}` can still respond when SQLite has transient open failures.
+- Startup now marks stale `queued`/`running` jobs as `failed` after restart so interrupted jobs do not remain stuck indefinitely.
 
 ## [0.5.0] - 2026-02-14
 ### Added

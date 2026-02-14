@@ -254,3 +254,19 @@ class Storage:
             "cache_deleted": int(cache_deleted or 0),
             "cutoff_epoch": cutoff,
         }
+
+    def mark_incomplete_jobs_failed(self, reason: str = "Server restarted during analysis") -> int:
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            updated = conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    error = COALESCE(error, ?),
+                    updated_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (reason, now),
+            ).rowcount
+            conn.commit()
+        return int(updated or 0)

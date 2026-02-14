@@ -658,6 +658,12 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    try:
+        stale = STORAGE.mark_incomplete_jobs_failed()
+        if stale:
+            LOGGER.warning("Marked %s incomplete job(s) as failed after restart", stale)
+    except sqlite3.OperationalError as exc:
+        LOGGER.error("Could not mark incomplete jobs as failed during startup: %s", exc)
 
     httpd = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     LOGGER.info("Serving on http://%s:%s", args.host, args.port)
