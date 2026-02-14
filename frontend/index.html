@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BlueSky User Summary</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <h1>BlueSky User Summary</h1>
+        <p>Public-post analysis with transparent metrics.</p>
+      </header>
+
+      <section class="card form-card">
+        <form id="analyze-form">
+          <label for="handle">BlueSky handle</label>
+          <input id="handle" name="handle" type="text" placeholder="alice.bsky.social" required />
+
+          <label for="max_items">Sample size (25-500)</label>
+          <input id="max_items" name="max_items" type="number" min="25" max="500" value="200" />
+
+          <label class="checkbox-row">
+            <input id="use_cache" name="use_cache" type="checkbox" checked />
+            Reuse recent cached data when available
+          </label>
+
+          <button type="submit">Analyze Public History</button>
+        </form>
+      </section>
+
+      <section class="card hidden" id="status-card">
+        <h2>Status</h2>
+        <p id="status-text">Waiting...</p>
+      </section>
+
+      <section class="card hidden" id="summary-card">
+        <h2>Summary</h2>
+        <p id="summary-text"></p>
+
+        <div class="grid" id="metrics-grid"></div>
+
+        <h3>Top Topics</h3>
+        <ul id="topics-list"></ul>
+
+        <h3>Top Terms</h3>
+        <ul id="terms-list"></ul>
+      </section>
+
+      <section class="card hidden" id="error-card">
+        <h2>Error</h2>
+        <p id="error-text"></p>
+      </section>
+    </main>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
