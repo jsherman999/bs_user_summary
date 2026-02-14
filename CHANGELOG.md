@@ -5,6 +5,8 @@
 ### Fixed
 - OpenAI non-chat models (for example `gpt-5.2-pro`) now auto-retry on a chat-compatible model instead of immediately returning deterministic fallback.
 - Frontend LLM status now shows explicit fallback/model-fallback reason text.
+- Frontend job polling now auto-retries transient failures (`Temporary database access failure`, network fetch errors) instead of aborting analysis immediately.
+- SQLite connection handling now uses stronger retry/backoff + WAL/busy-timeout settings to reduce transient DB-open failures during heavy polling.
 
 ## [0.5.0] - 2026-02-14
 ### Added

@@ -30,22 +30,30 @@ class Storage:
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure the file exists before opening connection URI in rwc mode.
+        self.db_path.touch(exist_ok=True)
         last_error: sqlite3.OperationalError | None = None
-        for attempt in range(1, 4):
+        db_uri = f"file:{self.db_path}?mode=rwc"
+        for attempt in range(1, 11):
             try:
-                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn = sqlite3.connect(db_uri, uri=True, timeout=10)
                 conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA busy_timeout = 5000")
                 return conn
             except sqlite3.OperationalError as exc:
                 last_error = exc
                 # Retry transient open failures before bubbling up.
-                time.sleep(0.05 * attempt)
+                time.sleep(min(1.0, 0.05 * attempt))
         if last_error is not None:
-            raise last_error
-        raise sqlite3.OperationalError("unable to open database file")
+            raise sqlite3.OperationalError(
+                f"unable to open database file at {self.db_path}: {last_error}"
+            )
+        raise sqlite3.OperationalError(f"unable to open database file at {self.db_path}")
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -159,7 +167,7 @@ class Storage:
             conn.commit()
 
     def get_job(self, job_id: int) -> JobRecord | None:
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             return None
@@ -177,7 +185,7 @@ class Storage:
         )
 
     def get_summary(self, job_id: int) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             row = conn.execute("SELECT summary_json FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None or row["summary_json"] is None:
             return None
@@ -199,7 +207,7 @@ class Storage:
 
     def get_user_cache(self, handle: str, max_age_seconds: int) -> dict[str, Any] | None:
         oldest_allowed = int(time.time()) - max_age_seconds
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             row = conn.execute(
                 "SELECT raw_json FROM user_cache WHERE handle = ? AND fetched_at >= ?",
                 (handle, oldest_allowed),
@@ -209,14 +217,14 @@ class Storage:
         return json.loads(row["raw_json"])
 
     def get_raw_for_handle(self, handle: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             row = conn.execute("SELECT raw_json FROM user_cache WHERE handle = ?", (handle,)).fetchone()
         if row is None:
             return None
         return json.loads(row["raw_json"])
 
     def get_job_status_counts(self) -> dict[str, int]:
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").fetchall()
         counts = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
         for row in rows:
@@ -225,7 +233,7 @@ class Storage:
         return counts
 
     def get_cache_count(self) -> int:
-        with self._connect() as conn:
+        with self._lock, self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS count FROM user_cache").fetchone()
         return int(row["count"]) if row else 0
 

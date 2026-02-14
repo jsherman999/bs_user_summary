@@ -26,6 +26,8 @@ const errorCard = document.getElementById("error-card");
 const errorText = document.getElementById("error-text");
 
 let currentJobId = null;
+const POLL_INTERVAL_MS = 900;
+const MAX_TRANSIENT_POLL_ERRORS = 20;
 
 function setHidden(el, hidden) {
   if (hidden) {
@@ -236,21 +238,57 @@ async function loadModelOptions() {
 }
 
 async function getJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch (error) {
+    const networkError = new Error(error?.message || "Failed to fetch");
+    networkError.isNetworkError = true;
+    throw networkError;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `Request failed (${response.status})`);
+    const httpError = new Error(payload.error || `Request failed (${response.status})`);
+    httpError.status = response.status;
+    throw httpError;
   }
   return payload;
 }
 
+function isTransientPollError(error) {
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || "").toLowerCase();
+  if (status === 503 || error?.isNetworkError) {
+    return true;
+  }
+  return (
+    message.includes("temporary database access failure") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror")
+  );
+}
+
 async function pollJob(jobId) {
+  let transientFailures = 0;
   while (true) {
-    const job = await getJson(`/api/jobs/${jobId}`);
-    updateStatusProgress(job);
+    let job;
+    try {
+      job = await getJson(`/api/jobs/${jobId}`);
+      transientFailures = 0;
+      updateStatusProgress(job);
+    } catch (error) {
+      if (isTransientPollError(error) && transientFailures < MAX_TRANSIENT_POLL_ERRORS) {
+        transientFailures += 1;
+        const waitMs = Math.min(5000, 400 * transientFailures);
+        statusText.textContent = `[poll-retry] Temporary fetch issue (${transientFailures}/${MAX_TRANSIENT_POLL_ERRORS}): ${error.message}`;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      throw error;
+    }
 
     if (job.status === "failed") {
       throw new Error(job.error || "Analysis failed");
@@ -261,7 +299,7 @@ async function pollJob(jobId) {
       return summary;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
 

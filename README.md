@@ -23,11 +23,13 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
   - fetch stage details
   - LLM chunk stage details
   - `x/y` counters for posts/chunks analyzed
+  - transient poll retry handling for temporary DB/network failures
 - Adds time-window comparison (recent window vs prior window).
 - Supports summary export in JSON and Markdown formats.
 - Exposes observability stats and retention cleanup endpoints.
 - Presents all results in a mobile-first UI, including evidence and comparison panels.
 - Stores job results and cache locally in SQLite.
+- Uses SQLite WAL + busy-timeout + retry/backoff to improve stability during long-running scans.
 
 ## Project Structure
 - `backend/server.py` HTTP server and API routes
