@@ -219,6 +219,74 @@ def _build_takes(signals: list[TopicSignal]) -> tuple[list[dict[str, Any]], list
     return takes, uncertainty_notes
 
 
+def _comparison_slice(feed_items: list[dict[str, Any]], start: dt.datetime, end: dt.datetime) -> dict[str, float]:
+    window = []
+    for item in feed_items:
+        ts = _parse_timestamp(item.get("created_at"))
+        if ts is None:
+            continue
+        if start <= ts < end:
+            window.append(item)
+
+    total = len(window)
+    replies = len([item for item in window if item.get("is_reply")])
+    return {
+        "items": float(total),
+        "replies": float(replies),
+        "reply_ratio": round((replies / total) if total else 0.0, 3),
+    }
+
+
+def _build_comparison(feed_items: list[dict[str, Any]], comparison_window_days: int) -> dict[str, Any] | None:
+    timestamps = [_parse_timestamp(item.get("created_at")) for item in feed_items]
+    timestamps = [ts for ts in timestamps if ts is not None]
+    if not timestamps:
+        return None
+
+    latest = max(timestamps)
+    recent_end = latest + dt.timedelta(seconds=1)
+    recent_start = recent_end - dt.timedelta(days=comparison_window_days)
+    prior_end = recent_start
+    prior_start = prior_end - dt.timedelta(days=comparison_window_days)
+
+    recent = _comparison_slice(feed_items, recent_start, recent_end)
+    prior = _comparison_slice(feed_items, prior_start, prior_end)
+
+    delta_items = int(recent["items"] - prior["items"])
+    delta_replies = int(recent["replies"] - prior["replies"])
+    delta_reply_ratio = round(recent["reply_ratio"] - prior["reply_ratio"], 3)
+
+    direction = "flat"
+    if delta_items > 0:
+        direction = "higher"
+    elif delta_items < 0:
+        direction = "lower"
+
+    return {
+        "window_days": comparison_window_days,
+        "recent_window": {
+            "start": recent_start.isoformat(),
+            "end": recent_end.isoformat(),
+            "items": int(recent["items"]),
+            "replies": int(recent["replies"]),
+            "reply_ratio": recent["reply_ratio"],
+        },
+        "prior_window": {
+            "start": prior_start.isoformat(),
+            "end": prior_end.isoformat(),
+            "items": int(prior["items"]),
+            "replies": int(prior["replies"]),
+            "reply_ratio": prior["reply_ratio"],
+        },
+        "delta": {
+            "items": delta_items,
+            "replies": delta_replies,
+            "reply_ratio": delta_reply_ratio,
+            "activity_direction": direction,
+        },
+    }
+
+
 def _build_claims(
     metrics: dict[str, Any], evidence: list[dict[str, Any]], takes: list[dict[str, Any]], handle: str
 ) -> list[dict[str, Any]]:
@@ -261,11 +329,10 @@ def _build_claims(
             }
         )
 
-    # Enforce no unsupported claims.
     return [claim for claim in claims if claim.get("evidence_ids")]
 
 
-def summarize_public_history(raw_data: dict[str, Any]) -> dict[str, Any]:
+def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: int = 30) -> dict[str, Any]:
     feed_items: list[dict[str, Any]] = raw_data.get("feed_items") or []
     profile = raw_data.get("profile") or {}
     handle = raw_data.get("handle") or ""
@@ -316,6 +383,7 @@ def summarize_public_history(raw_data: dict[str, Any]) -> dict[str, Any]:
     top_topics = [{"topic": signal.topic, "count": signal.total} for signal in signals[:5]]
     takes, uncertainty_notes = _build_takes(signals)
     claims = _build_claims(metrics=metrics, evidence=evidence, takes=takes, handle=handle)
+    comparison = _build_comparison(feed_items, comparison_window_days=max(7, min(90, comparison_window_days)))
 
     summary_text_parts: list[str] = []
     if metrics["sample_size"] == 0:
@@ -323,11 +391,17 @@ def summarize_public_history(raw_data: dict[str, Any]) -> dict[str, Any]:
     else:
         summary_text_parts.append(f"Analyzed {metrics['sample_size']} recent public items from @{handle}.")
         summary_text_parts.extend(claim["text"] for claim in claims)
+        if comparison:
+            direction = comparison["delta"]["activity_direction"]
+            summary_text_parts.append(
+                f"Compared with the prior {comparison['window_days']}-day window, activity is {direction}."
+            )
         if not takes:
             summary_text_parts.append("Topic-specific takes are limited due to weak or sparse signals.")
 
     return {
         "generated_at": dt.datetime.now(dt.UTC).isoformat(),
+        "comparison_window_days": max(7, min(90, comparison_window_days)),
         "user": {
             "handle": handle,
             "did": raw_data.get("did"),
@@ -339,6 +413,7 @@ def summarize_public_history(raw_data: dict[str, Any]) -> dict[str, Any]:
         "takes": takes,
         "claims": claims,
         "evidence": evidence,
+        "comparison": comparison,
         "uncertainty_notes": uncertainty_notes,
         "honesty_notes": [
             "This summary is based only on sampled public BlueSky content fetched during this run.",

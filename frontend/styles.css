@@ -90,6 +90,19 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.export-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.export-links a {
+  text-decoration: none;
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-14
+### Added
+- Comparison-window analysis in summary output (recent vs prior period deltas).
+- Export endpoints for JSON and Markdown reports.
+- Observability endpoint (`/api/stats`) with uptime, job counts, cache count, and request counters.
+- Retention cleanup endpoint (`/api/maintenance/cleanup`) for old cache and completed/failed jobs.
+- UI support for comparison window input and export links.
+- Analyzer/storage test coverage for comparison and cleanup behavior.
+
 ## [0.2.0] - 2026-02-14
 ### Added
 - Claim-level evidence linking in summary output.

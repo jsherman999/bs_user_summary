@@ -90,6 +90,26 @@ class AnalyzerTests(unittest.TestCase):
             self.assertTrue(claim["evidence_ids"])
             self.assertTrue(set(claim["evidence_ids"]).issubset(evidence_ids))
 
+    def test_comparison_window_present_with_timestamped_data(self) -> None:
+        raw_data = {
+            "handle": "compare.bsky.social",
+            "did": "did:plc:test",
+            "profile": {"handle": "compare.bsky.social"},
+            "feed_items": [
+                {"uri": "at://1", "created_at": "2026-01-01T10:00:00Z", "text": "older", "is_reply": False},
+                {"uri": "at://2", "created_at": "2026-01-15T10:00:00Z", "text": "older 2", "is_reply": True},
+                {"uri": "at://3", "created_at": "2026-02-01T10:00:00Z", "text": "recent", "is_reply": False},
+                {"uri": "at://4", "created_at": "2026-02-10T10:00:00Z", "text": "recent 2", "is_reply": True},
+            ],
+        }
+
+        summary = summarize_public_history(raw_data, comparison_window_days=20)
+
+        self.assertIn("comparison", summary)
+        self.assertIsNotNone(summary["comparison"])
+        assert summary["comparison"] is not None
+        self.assertEqual(summary["comparison"]["window_days"], 20)
+
 
 if __name__ == "__main__":
     unittest.main()

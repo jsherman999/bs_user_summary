@@ -21,6 +21,9 @@
           <label for="max_items">Sample size (25-500)</label>
           <input id="max_items" name="max_items" type="number" min="25" max="500" value="200" />
 
+          <label for="comparison_window_days">Comparison window (7-90 days)</label>
+          <input id="comparison_window_days" name="comparison_window_days" type="number" min="7" max="90" value="30" />
+
           <label class="checkbox-row">
             <input id="use_cache" name="use_cache" type="checkbox" checked />
             Reuse recent cached data when available
@@ -39,7 +42,15 @@
         <h2>Summary</h2>
         <p id="summary-text"></p>
 
+        <div class="export-links" id="export-links">
+          <a id="export-json" href="#">Export JSON</a>
+          <a id="export-md" href="#">Export Markdown</a>
+        </div>
+
         <div class="grid" id="metrics-grid"></div>
+
+        <h3>Comparison</h3>
+        <ul id="comparison-list"></ul>
 
         <h3>Claims</h3>
         <ul id="claims-list"></ul>

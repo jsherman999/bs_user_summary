@@ -14,14 +14,17 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
   - claim objects with confidence and evidence IDs
   - topic takes with uncertainty notes
   - honesty notes about data boundaries
-- Presents all results in a mobile-first UI, including an evidence panel.
+- Adds time-window comparison (recent window vs prior window).
+- Supports summary export in JSON and Markdown formats.
+- Exposes observability stats and retention cleanup endpoints.
+- Presents all results in a mobile-first UI, including evidence and comparison panels.
 - Stores job results and cache locally in SQLite.
 
 ## Project Structure
 - `backend/server.py` HTTP server and API routes
 - `backend/bluesky_client.py` BlueSky public API client
-- `backend/analyzer.py` deterministic summarization logic + evidence linking
-- `backend/storage.py` SQLite persistence for jobs/cache
+- `backend/analyzer.py` deterministic summarization logic + evidence linking + comparison
+- `backend/storage.py` SQLite persistence for jobs/cache + cleanup
 - `frontend/` static mobile-friendly web app
 - `docs/` project documentation
 - `tests/` unit tests
@@ -44,15 +47,19 @@ To find LAN IP on macOS:
 ipconfig getifaddr en0
 ```
 
-## API Endpoints (Phase 2)
+## API Endpoints (Phase 3)
 - `GET /api/health`
 - `POST /api/analyze`
-  - body: `{ "handle": "alice.bsky.social", "max_items": 200, "use_cache": true }`
+  - body: `{ "handle": "alice.bsky.social", "max_items": 200, "comparison_window_days": 30, "use_cache": true }`
 - `GET /api/jobs/{job_id}`
 - `GET /api/summary/{job_id}`
+- `GET /api/export/{job_id}.json`
+- `GET /api/export/{job_id}.md`
+- `GET /api/stats`
+- `POST /api/maintenance/cleanup`
 - `GET /api/user/raw?handle=alice.bsky.social`
 
-See `docs/api.md` for full payload shape, including claim/evidence fields.
+See `docs/api.md` for full payload examples.
 
 ## Tests
 ```bash
@@ -63,10 +70,11 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - Uses public BlueSky data only.
 - No private account access.
 - Caches fetched public data and summaries in local SQLite at `data/app.db`.
+- Cleanup endpoint can delete old cache/job records by age.
 
 ## Roadmap Status
 - Phase 1: done
 - Phase 2: done
-- Phase 3: in progress
+- Phase 3: done
 
 Detailed task breakdown: `docs/task-breakdown.md`

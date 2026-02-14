@@ -146,3 +146,35 @@ class Storage:
         if row is None:
             return None
         return json.loads(row["raw_json"])
+
+    def get_job_status_counts(self) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").fetchall()
+        counts = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
+        for row in rows:
+            counts[str(row["status"])] = int(row["count"])
+        counts["total"] = sum(counts.values())
+        return counts
+
+    def get_cache_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM user_cache").fetchone()
+        return int(row["count"]) if row else 0
+
+    def cleanup_old_data(self, max_age_seconds: int) -> dict[str, int]:
+        cutoff = int(time.time()) - max_age_seconds
+        with self._lock, self._connect() as conn:
+            jobs_deleted = conn.execute(
+                "DELETE FROM jobs WHERE updated_at < ? AND status IN ('completed', 'failed')",
+                (cutoff,),
+            ).rowcount
+            cache_deleted = conn.execute(
+                "DELETE FROM user_cache WHERE fetched_at < ?",
+                (cutoff,),
+            ).rowcount
+            conn.commit()
+        return {
+            "jobs_deleted": int(jobs_deleted or 0),
+            "cache_deleted": int(cache_deleted or 0),
+            "cutoff_epoch": cutoff,
+        }

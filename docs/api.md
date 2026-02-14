@@ -18,6 +18,7 @@ Request body:
 {
   "handle": "alice.bsky.social",
   "max_items": 200,
+  "comparison_window_days": 30,
   "use_cache": true,
   "cache_age_seconds": 900
 }
@@ -26,6 +27,7 @@ Request body:
 Notes:
 - `handle` required.
 - `max_items` clamped to `25..500`.
+- `comparison_window_days` clamped to `7..90`.
 - `cache_age_seconds` clamped to `60..86400`.
 
 Response:
@@ -33,7 +35,8 @@ Response:
 {
   "job_id": 1,
   "status": "queued",
-  "handle": "alice.bsky.social"
+  "handle": "alice.bsky.social",
+  "comparison_window_days": 30
 }
 ```
 
@@ -55,8 +58,9 @@ Response:
 ## `GET /api/summary/{job_id}`
 Read summary for completed job.
 
-Phase 2 response sections:
+Phase 3 response sections:
 - `generated_at`
+- `comparison_window_days`
 - `user`
 - `metrics`
 - `top_terms`
@@ -64,6 +68,7 @@ Phase 2 response sections:
 - `takes`
 - `claims`
 - `evidence`
+- `comparison`
 - `uncertainty_notes`
 - `honesty_notes`
 - `summary_text`
@@ -88,6 +93,50 @@ Example evidence object:
   "text": "post text",
   "is_reply": false,
   "topics": ["technology"]
+}
+```
+
+Example comparison object:
+```json
+{
+  "window_days": 30,
+  "recent_window": { "items": 25, "replies": 10, "reply_ratio": 0.4 },
+  "prior_window": { "items": 12, "replies": 3, "reply_ratio": 0.25 },
+  "delta": { "items": 13, "replies": 7, "reply_ratio": 0.15, "activity_direction": "higher" }
+}
+```
+
+## `GET /api/export/{job_id}.json`
+Returns the same payload as `GET /api/summary/{job_id}`.
+
+## `GET /api/export/{job_id}.md`
+Returns a Markdown report built from summary metrics, claims, takes, comparison, and uncertainty notes.
+
+## `GET /api/stats`
+Service observability endpoint.
+
+Response includes:
+- `uptime_seconds`
+- `started_at`
+- `job_counts`
+- `cache_entries`
+- `request_counts`
+
+## `POST /api/maintenance/cleanup`
+Delete old cache and completed/failed jobs.
+
+Request body:
+```json
+{ "max_age_days": 30 }
+```
+
+Response:
+```json
+{
+  "max_age_days": 30,
+  "jobs_deleted": 4,
+  "cache_deleted": 1,
+  "cutoff_epoch": 1736900000
 }
 ```
 

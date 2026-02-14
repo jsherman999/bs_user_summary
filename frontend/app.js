@@ -8,9 +8,12 @@ const topicsList = document.getElementById("topics-list");
 const termsList = document.getElementById("terms-list");
 const claimsList = document.getElementById("claims-list");
 const takesList = document.getElementById("takes-list");
+const comparisonList = document.getElementById("comparison-list");
 const uncertaintyList = document.getElementById("uncertainty-list");
 const honestyList = document.getElementById("honesty-list");
 const evidenceList = document.getElementById("evidence-list");
+const exportJson = document.getElementById("export-json");
+const exportMd = document.getElementById("export-md");
 const errorCard = document.getElementById("error-card");
 const errorText = document.getElementById("error-text");
 
@@ -93,6 +96,28 @@ function renderEvidence(evidenceItems) {
   }
 }
 
+function renderComparison(comparison) {
+  if (!comparison) {
+    renderList(comparisonList, [], (entry) => entry, "Not enough timestamped data for comparison.");
+    return;
+  }
+
+  const recent = comparison.recent_window || {};
+  const prior = comparison.prior_window || {};
+  const delta = comparison.delta || {};
+
+  const lines = [
+    `Window days: ${comparison.window_days}`,
+    `Recent window items: ${recent.items ?? 0}`,
+    `Prior window items: ${prior.items ?? 0}`,
+    `Item delta: ${delta.items ?? 0}`,
+    `Activity direction: ${delta.activity_direction || "flat"}`,
+    `Reply ratio delta: ${delta.reply_ratio ?? 0}`,
+  ];
+
+  renderList(comparisonList, lines, (line) => line, "Not enough timestamped data for comparison.");
+}
+
 async function getJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -132,6 +157,7 @@ form.addEventListener("submit", async (event) => {
 
   const handle = document.getElementById("handle").value.trim();
   const maxItems = Number(document.getElementById("max_items").value || 200);
+  const comparisonWindowDays = Number(document.getElementById("comparison_window_days").value || 30);
   const useCache = document.getElementById("use_cache").checked;
 
   try {
@@ -140,6 +166,7 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         handle,
         max_items: maxItems,
+        comparison_window_days: comparisonWindowDays,
         use_cache: useCache,
       }),
     });
@@ -149,8 +176,12 @@ form.addEventListener("submit", async (event) => {
     setHidden(summaryCard, false);
     setHidden(statusCard, true);
 
+    exportJson.href = `/api/export/${currentJobId}.json`;
+    exportMd.href = `/api/export/${currentJobId}.md`;
+
     summaryText.textContent = summary.summary_text || "No narrative summary available.";
     renderMetrics(summary.metrics || {});
+    renderComparison(summary.comparison || null);
 
     renderList(topicsList, summary.top_topics || [], (topic) => `${topic.topic}: ${topic.count}`);
     renderList(termsList, summary.top_terms || [], (term) => `${term.term}: ${term.count}`);
