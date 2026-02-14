@@ -6,6 +6,11 @@ const summaryText = document.getElementById("summary-text");
 const metricsGrid = document.getElementById("metrics-grid");
 const topicsList = document.getElementById("topics-list");
 const termsList = document.getElementById("terms-list");
+const claimsList = document.getElementById("claims-list");
+const takesList = document.getElementById("takes-list");
+const uncertaintyList = document.getElementById("uncertainty-list");
+const honestyList = document.getElementById("honesty-list");
+const evidenceList = document.getElementById("evidence-list");
 const errorCard = document.getElementById("error-card");
 const errorText = document.getElementById("error-text");
 
@@ -55,7 +60,7 @@ function renderMetrics(metrics) {
   }
 }
 
-function renderList(listEl, entries, formatter) {
+function renderList(listEl, entries, formatter, emptyText = "No strong signal from sampled data.") {
   listEl.innerHTML = "";
   for (const entry of entries) {
     const item = document.createElement("li");
@@ -64,8 +69,27 @@ function renderList(listEl, entries, formatter) {
   }
   if (!entries.length) {
     const item = document.createElement("li");
-    item.textContent = "No strong signal from sampled data.";
+    item.textContent = emptyText;
     listEl.appendChild(item);
+  }
+}
+
+function renderEvidence(evidenceItems) {
+  evidenceList.innerHTML = "";
+  const maxEvidence = 24;
+  for (const entry of evidenceItems.slice(0, maxEvidence)) {
+    const node = document.createElement("article");
+    node.className = "evidence-card";
+    const meta = `${entry.id} | ${entry.created_at || "unknown time"} | ${entry.is_reply ? "reply" : "post"}`;
+    node.innerHTML = `
+      <div class="evidence-meta">${meta}</div>
+      <div>${entry.text || "(no text)"}</div>
+    `;
+    evidenceList.appendChild(node);
+  }
+
+  if (!evidenceItems.length) {
+    evidenceList.textContent = "No evidence items were retrieved for this run.";
   }
 }
 
@@ -127,8 +151,29 @@ form.addEventListener("submit", async (event) => {
 
     summaryText.textContent = summary.summary_text || "No narrative summary available.";
     renderMetrics(summary.metrics || {});
+
     renderList(topicsList, summary.top_topics || [], (topic) => `${topic.topic}: ${topic.count}`);
     renderList(termsList, summary.top_terms || [], (term) => `${term.term}: ${term.count}`);
+    renderList(
+      claimsList,
+      summary.claims || [],
+      (claim) => `${claim.text} (confidence ${claim.confidence}; evidence: ${(claim.evidence_ids || []).join(", ")})`,
+      "No grounded claims available."
+    );
+    renderList(
+      takesList,
+      summary.takes || [],
+      (take) => `${take.statement} (confidence ${take.confidence}; mentions ${take.signal_count})`,
+      "No topic takes available from sampled content."
+    );
+    renderList(
+      uncertaintyList,
+      summary.uncertainty_notes || [],
+      (entry) => entry,
+      "No additional uncertainty notes."
+    );
+    renderList(honestyList, summary.honesty_notes || [], (entry) => entry, "");
+    renderEvidence(summary.evidence || []);
   } catch (error) {
     showError(error.message || "Unexpected error.");
   } finally {

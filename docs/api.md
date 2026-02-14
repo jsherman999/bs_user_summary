@@ -55,13 +55,41 @@ Response:
 ## `GET /api/summary/{job_id}`
 Read summary for completed job.
 
-Response includes:
+Phase 2 response sections:
 - `generated_at`
 - `user`
 - `metrics`
 - `top_terms`
 - `top_topics`
+- `takes`
+- `claims`
+- `evidence`
+- `uncertainty_notes`
+- `honesty_notes`
 - `summary_text`
+
+Example claim object:
+```json
+{
+  "id": "claim-replies",
+  "type": "interaction",
+  "text": "Replies are 40.0% of sampled activity.",
+  "confidence": 0.9,
+  "evidence_ids": ["ev1", "ev7"]
+}
+```
+
+Example evidence object:
+```json
+{
+  "id": "ev1",
+  "uri": "at://did:.../app.bsky.feed.post/abc123",
+  "created_at": "2026-02-13T10:00:00+00:00",
+  "text": "post text",
+  "is_reply": false,
+  "topics": ["technology"]
+}
+```
 
 ## `GET /api/user/raw?handle={handle}`
 Returns latest cached raw BlueSky response normalization for a handle.
