@@ -42,8 +42,11 @@
             <option value="none">none (deterministic only)</option>
           </select>
 
-          <label for="llm_model">LLM model (optional)</label>
-          <input id="llm_model" name="llm_model" type="text" placeholder="gpt-5-mini" />
+          <label for="llm_model">LLM model</label>
+          <select id="llm_model" name="llm_model">
+            <option value="">Loading model list...</option>
+          </select>
+          <p class="input-note" id="llm-model-note"></p>
 
           <label for="llm_max_posts">LLM max posts (25-500)</label>
           <input id="llm_max_posts" name="llm_max_posts" type="number" min="25" max="500" value="500" />
@@ -53,8 +56,15 @@
       </section>
 
       <section class="card hidden" id="status-card">
-        <h2>Status</h2>
+        <h2>Live Progress</h2>
         <p id="status-text">Waiting...</p>
+        <div class="progress-wrap">
+          <div class="progress-track">
+            <div class="progress-fill" id="status-progress-fill"></div>
+          </div>
+          <div class="progress-meta" id="status-progress-meta">0%</div>
+        </div>
+        <ul id="status-details-list"></ul>
       </section>
 
       <section class="card hidden" id="summary-card">

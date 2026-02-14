@@ -6,7 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 BASE_URL = "https://public.api.bsky.app/xrpc"
@@ -87,12 +87,37 @@ class BlueSkyClient:
         )
         return payload
 
-    def fetch_public_history(self, handle: str, options: FetchOptions | None = None) -> dict[str, Any]:
+    def fetch_public_history(
+        self,
+        handle: str,
+        options: FetchOptions | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         if options is None:
             options = FetchOptions()
 
         normalized_handle = handle.strip().lstrip("@").lower()
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "fetch-resolve",
+                    "message": f"Resolving handle @{normalized_handle}",
+                    "current": 0,
+                    "total": max(1, options.max_items),
+                    "meta": {"handle": normalized_handle},
+                }
+            )
         did = self.resolve_handle(normalized_handle, options)
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "fetch-profile",
+                    "message": f"Fetching public profile for @{normalized_handle}",
+                    "current": 0,
+                    "total": max(1, options.max_items),
+                    "meta": {"did": did},
+                }
+            )
         profile = self.get_profile(did, options)
 
         feed_items: list[dict[str, Any]] = []
@@ -138,8 +163,38 @@ class BlueSkyClient:
                 if len(feed_items) >= options.max_items:
                     break
 
+            if progress_callback:
+                progress_callback(
+                    {
+                        "stage": "fetch-feed",
+                        "message": f"Fetched {len(feed_items)} public posts/replies",
+                        "current": len(feed_items),
+                        "total": max(1, options.max_items),
+                        "meta": {
+                            "fetched_posts": len(feed_items),
+                            "requested_posts": max(1, options.max_items),
+                            "cursor_present": bool(cursor),
+                        },
+                    }
+                )
+
             if not cursor:
                 break
+
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "fetch-complete",
+                    "message": f"Fetch complete ({len(feed_items)} items)",
+                    "current": len(feed_items),
+                    "total": max(1, options.max_items),
+                    "meta": {
+                        "fetched_posts": len(feed_items),
+                        "requested_posts": max(1, options.max_items),
+                        "did": did,
+                    },
+                }
+            )
 
         return {
             "fetched_at": int(time.time()),

@@ -40,6 +40,19 @@ class LLMAssessorTests(unittest.TestCase):
         self.assertEqual(result["source"], "deterministic_fallback")
         self.assertEqual(result["status"], "fallback")
 
+    def test_provider_none_fallback_handles_politics_topic(self) -> None:
+        result = assess_topic_alignment(
+            evidence=[
+                {"id": "ev1", "text": "Election policy and senate vote updates", "is_reply": False},
+                {"id": "ev2", "text": "Government regulation debate", "is_reply": True},
+            ],
+            top_topics=[{"topic": "politics", "count": 4}],
+            takes=[],
+            options={"enabled": True, "provider": "none"},
+        )
+        topics = [entry["topic"] for entry in result["topic_alignments"]]
+        self.assertIn("politics", topics)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,11 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
   - per-topic likely alignment (`for`, `against`, `mixed`, `unclear`)
   - usage accounting (`input_tokens`, `output_tokens`)
   - automatic fallback when provider/key/model is unavailable
+  - stronger political-topic cue detection in prompt + conservative uncertainty when unclear
+- Live progress reporting during jobs:
+  - fetch stage details
+  - LLM chunk stage details
+  - `x/y` counters for posts/chunks analyzed
 - Adds time-window comparison (recent window vs prior window).
 - Supports summary export in JSON and Markdown formats.
 - Exposes observability stats and retention cleanup endpoints.
@@ -83,6 +88,7 @@ Details: `docs/launchd.md`
 - `GET /api/export/{job_id}.json`
 - `GET /api/export/{job_id}.md`
 - `GET /api/stats`
+- `GET /api/llm/models?provider=openai|openrouter|auto&free_only=true|false`
 - `POST /api/maintenance/cleanup`
 - `GET /api/user/raw?handle=alice.bsky.social`
 

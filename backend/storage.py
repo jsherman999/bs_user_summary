@@ -18,6 +18,7 @@ class JobRecord:
     updated_at: int
     error: str | None
     summary: dict[str, Any] | None
+    progress: dict[str, Any] | None
 
 
 class Storage:
@@ -44,10 +45,16 @@ class Storage:
                     updated_at INTEGER NOT NULL,
                     error TEXT,
                     summary_json TEXT,
-                    raw_json TEXT
+                    raw_json TEXT,
+                    progress_json TEXT
                 )
                 """
             )
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "progress_json" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN progress_json TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_cache (
@@ -62,10 +69,17 @@ class Storage:
 
     def create_job(self, handle: str) -> int:
         now = int(time.time())
+        progress = {
+            "stage": "queued",
+            "message": "Job queued",
+            "current": 0,
+            "total": 0,
+            "percent": 0.0,
+        }
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO jobs (handle, status, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (handle, "queued", now, now),
+                "INSERT INTO jobs (handle, status, created_at, updated_at, progress_json) VALUES (?, ?, ?, ?, ?)",
+                (handle, "queued", now, now, json.dumps(progress)),
             )
             conn.commit()
             return int(cursor.lastrowid)
@@ -81,14 +95,55 @@ class Storage:
 
     def set_job_result(self, job_id: int, summary: dict[str, Any], raw_data: dict[str, Any]) -> None:
         now = int(time.time())
+        progress = {
+            "stage": "completed",
+            "message": "Analysis completed",
+            "current": 1,
+            "total": 1,
+            "percent": 100.0,
+        }
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, summary_json = ?, raw_json = ?, error = NULL, updated_at = ?
+                SET status = ?, summary_json = ?, raw_json = ?, progress_json = ?, error = NULL, updated_at = ?
                 WHERE id = ?
                 """,
-                ("completed", json.dumps(summary), json.dumps(raw_data), now, job_id),
+                ("completed", json.dumps(summary), json.dumps(raw_data), json.dumps(progress), now, job_id),
+            )
+            conn.commit()
+
+    def set_job_progress(
+        self,
+        job_id: int,
+        stage: str,
+        message: str,
+        current: int,
+        total: int,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        now = int(time.time())
+        current = max(0, int(current))
+        total = max(0, int(total))
+        if total <= 0:
+            percent = 0.0
+        else:
+            percent = round(min(100.0, max(0.0, (current / total) * 100.0)), 1)
+
+        progress = {
+            "stage": stage,
+            "message": message,
+            "current": current,
+            "total": total,
+            "percent": percent,
+            "meta": meta or {},
+            "updated_at": now,
+        }
+
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET progress_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(progress), now, job_id),
             )
             conn.commit()
 
@@ -98,6 +153,7 @@ class Storage:
         if row is None:
             return None
         summary = json.loads(row["summary_json"]) if row["summary_json"] else None
+        progress = json.loads(row["progress_json"]) if row["progress_json"] else None
         return JobRecord(
             id=int(row["id"]),
             handle=str(row["handle"]),
@@ -106,6 +162,7 @@ class Storage:
             updated_at=int(row["updated_at"]),
             error=row["error"],
             summary=summary,
+            progress=progress,
         )
 
     def get_summary(self, job_id: int) -> dict[str, Any] | None:

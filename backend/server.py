@@ -12,10 +12,12 @@ from collections import defaultdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from backend.analyzer import summarize_public_history
 from backend.bluesky_client import BlueSkyClient, BlueSkyError, FetchOptions
+from backend.llm_assessor import LLMUnavailableError, list_available_models
 from backend.storage import Storage
 
 
@@ -154,29 +156,80 @@ def _run_job(
     llm_options: dict[str, Any],
 ) -> None:
     STORAGE.update_job_status(job_id, "running")
+
+    def _job_progress(event: dict[str, Any]) -> None:
+        STORAGE.set_job_progress(
+            job_id=job_id,
+            stage=str(event.get("stage") or "running"),
+            message=str(event.get("message") or "Running analysis"),
+            current=int(event.get("current") or 0),
+            total=int(event.get("total") or 0),
+            meta=event.get("meta") if isinstance(event.get("meta"), dict) else {},
+        )
+
     try:
         options = FetchOptions(max_items=max_items)
         raw_data = None
+
+        _job_progress(
+            {
+                "stage": "prepare",
+                "message": f"Preparing analysis for @{handle}",
+                "current": 0,
+                "total": 1,
+                "meta": {"handle": handle},
+            }
+        )
 
         if use_cache:
             raw_data = STORAGE.get_user_cache(handle, max_age_seconds=cache_age_s)
             if raw_data is not None:
                 LOGGER.info("Using cache for @%s (job=%s)", handle, job_id)
+                _job_progress(
+                    {
+                        "stage": "fetch-cache",
+                        "message": "Loaded public data from cache",
+                        "current": 1,
+                        "total": 1,
+                        "meta": {
+                            "fetched_posts": len(raw_data.get("feed_items") or []),
+                            "requested_posts": max_items,
+                            "cache_used": True,
+                        },
+                    }
+                )
 
         if raw_data is None:
-            raw_data = CLIENT.fetch_public_history(handle, options=options)
+            raw_data = CLIENT.fetch_public_history(handle, options=options, progress_callback=_job_progress)
             STORAGE.set_user_cache(handle, raw_data.get("did") or "", raw_data)
 
+        _job_progress(
+            {
+                "stage": "analyze-deterministic",
+                "message": "Running deterministic metrics and summaries",
+                "current": 1,
+                "total": 3,
+                "meta": {
+                    "fetched_posts": len(raw_data.get("feed_items") or []),
+                    "requested_posts": max_items,
+                },
+            }
+        )
         summary = summarize_public_history(
-            raw_data, comparison_window_days=comparison_window_days, llm_options=llm_options
+            raw_data,
+            comparison_window_days=comparison_window_days,
+            llm_options=llm_options,
+            progress_callback=_job_progress,
         )
         STORAGE.set_job_result(job_id, summary=summary, raw_data=raw_data)
         LOGGER.info("Completed job %s for @%s", job_id, handle)
     except BlueSkyError as exc:
         STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        _job_progress({"stage": "failed", "message": str(exc), "current": 0, "total": 1})
         LOGGER.error("BlueSky error for job %s: %s", job_id, exc)
     except Exception as exc:  # noqa: BLE001
         STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        _job_progress({"stage": "failed", "message": str(exc), "current": 0, "total": 1})
         LOGGER.error("Unhandled error for job %s: %s\n%s", job_id, exc, traceback.format_exc())
 
 
@@ -197,6 +250,26 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/health":
             _json_response(self, HTTPStatus.OK, {"ok": True, "service": "bs-user-summary"})
+            return
+
+        if path == "/api/llm/models":
+            query = parse_qs(parsed.query)
+            provider = str((query.get("provider") or ["auto"])[0]).strip().lower()
+            free_only = str((query.get("free_only") or ["false"])[0]).strip().lower() in {"1", "true", "yes"}
+            try:
+                models = list_available_models(provider=provider, free_only=free_only)
+                _json_response(self, HTTPStatus.OK, models)
+            except LLMUnavailableError as exc:
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "provider": provider,
+                        "default_model": None,
+                        "models": [],
+                        "error": str(exc),
+                    },
+                )
             return
 
         if path == "/api/stats":
@@ -233,6 +306,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "created_at": job.created_at,
                     "updated_at": job.updated_at,
                     "error": job.error,
+                    "progress": job.progress,
                 },
             )
             return

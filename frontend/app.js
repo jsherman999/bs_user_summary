@@ -1,6 +1,9 @@
 const form = document.getElementById("analyze-form");
 const statusCard = document.getElementById("status-card");
 const statusText = document.getElementById("status-text");
+const statusProgressFill = document.getElementById("status-progress-fill");
+const statusProgressMeta = document.getElementById("status-progress-meta");
+const statusDetailsList = document.getElementById("status-details-list");
 const summaryCard = document.getElementById("summary-card");
 const summaryText = document.getElementById("summary-text");
 const metricsGrid = document.getElementById("metrics-grid");
@@ -16,6 +19,9 @@ const honestyList = document.getElementById("honesty-list");
 const evidenceList = document.getElementById("evidence-list");
 const exportJson = document.getElementById("export-json");
 const exportMd = document.getElementById("export-md");
+const llmProviderSelect = document.getElementById("llm_provider");
+const llmModelSelect = document.getElementById("llm_model");
+const llmModelNote = document.getElementById("llm-model-note");
 const errorCard = document.getElementById("error-card");
 const errorText = document.getElementById("error-text");
 
@@ -34,6 +40,9 @@ function resetView() {
   setHidden(summaryCard, true);
   setHidden(statusCard, false);
   statusText.textContent = "Queued...";
+  statusProgressFill.style.width = "0%";
+  statusProgressMeta.textContent = "0%";
+  statusDetailsList.innerHTML = "";
 }
 
 function showError(message) {
@@ -72,7 +81,7 @@ function renderList(listEl, entries, formatter, emptyText = "No strong signal fr
     item.textContent = formatter(entry);
     listEl.appendChild(item);
   }
-  if (!entries.length) {
+  if (!entries.length && emptyText) {
     const item = document.createElement("li");
     item.textContent = emptyText;
     listEl.appendChild(item);
@@ -143,6 +152,85 @@ function renderLlmAssessment(assessment) {
   );
 }
 
+function updateStatusProgress(job) {
+  const progress = job.progress || {};
+  const stage = progress.stage || job.status;
+  const message = progress.message || `Job ${job.id}: ${job.status}`;
+  const percent = Number(progress.percent || 0);
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  const meta = progress.meta || {};
+
+  const stageText = stage ? `[${stage}] ` : "";
+  const countText = total > 0 ? ` (${current}/${total})` : "";
+  statusText.textContent = `${stageText}${message}${countText}`;
+
+  statusProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  statusProgressMeta.textContent = `${percent.toFixed(1)}%`;
+
+  const detailLines = [];
+  if (meta.fetched_posts !== undefined || meta.requested_posts !== undefined) {
+    detailLines.push(`Fetched: ${meta.fetched_posts ?? 0}/${meta.requested_posts ?? 0} posts`);
+  }
+  if (meta.posts_analyzed !== undefined || meta.posts_total !== undefined) {
+    detailLines.push(`Analyzed: ${meta.posts_analyzed ?? 0}/${meta.posts_total ?? 0} posts`);
+  }
+  if (meta.chunks_analyzed !== undefined || meta.chunks_total !== undefined) {
+    detailLines.push(`LLM chunks: ${meta.chunks_analyzed ?? 0}/${meta.chunks_total ?? 0}`);
+  }
+  if (meta.provider || meta.model) {
+    detailLines.push(`LLM: ${(meta.provider || "n/a")}:${(meta.model || "default")}`);
+  }
+
+  renderList(statusDetailsList, detailLines, (line) => line, "");
+}
+
+function setModelOptions(models, defaultModel, priorSelection) {
+  llmModelSelect.innerHTML = "";
+
+  const autoOption = document.createElement("option");
+  autoOption.value = "";
+  autoOption.textContent = defaultModel ? `default (${defaultModel})` : "default";
+  llmModelSelect.appendChild(autoOption);
+
+  for (const model of models) {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.free ? `${model.id} (free)` : model.id;
+    llmModelSelect.appendChild(option);
+  }
+
+  if (priorSelection && [...llmModelSelect.options].some((row) => row.value === priorSelection)) {
+    llmModelSelect.value = priorSelection;
+  } else {
+    llmModelSelect.value = "";
+  }
+}
+
+async function loadModelOptions() {
+  const provider = llmProviderSelect.value;
+  const prior = llmModelSelect.value;
+  llmModelSelect.innerHTML = "<option value=''>Loading model list...</option>";
+
+  try {
+    const freeOnly = provider === "openrouter" ? "true" : "false";
+    const payload = await getJson(`/api/llm/models?provider=${encodeURIComponent(provider)}&free_only=${freeOnly}`);
+    const models = payload.models || [];
+    setModelOptions(models, payload.default_model || "", prior);
+
+    if (payload.error) {
+      llmModelNote.textContent = `Model list note: ${payload.error}`;
+    } else if (!models.length) {
+      llmModelNote.textContent = "No models returned. The selected provider may not be configured.";
+    } else {
+      llmModelNote.textContent = `Loaded ${models.length} model options from ${payload.provider}.`;
+    }
+  } catch (error) {
+    llmModelSelect.innerHTML = "<option value=''>default</option>";
+    llmModelNote.textContent = `Could not load models: ${error.message}`;
+  }
+}
+
 async function getJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -158,7 +246,7 @@ async function getJson(url, options = {}) {
 async function pollJob(jobId) {
   while (true) {
     const job = await getJson(`/api/jobs/${jobId}`);
-    statusText.textContent = `Job ${job.id}: ${job.status}`;
+    updateStatusProgress(job);
 
     if (job.status === "failed") {
       throw new Error(job.error || "Analysis failed");
@@ -169,7 +257,7 @@ async function pollJob(jobId) {
       return summary;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise((resolve) => setTimeout(resolve, 900));
   }
 }
 
@@ -207,7 +295,6 @@ form.addEventListener("submit", async (event) => {
 
     const summary = await pollJob(currentJobId);
     setHidden(summaryCard, false);
-    setHidden(statusCard, true);
 
     exportJson.href = `/api/export/${currentJobId}.json`;
     exportMd.href = `/api/export/${currentJobId}.md`;
@@ -245,3 +332,9 @@ form.addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+
+llmProviderSelect.addEventListener("change", () => {
+  loadModelOptions();
+});
+
+loadModelOptions();

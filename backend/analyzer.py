@@ -4,7 +4,7 @@ import collections
 import datetime as dt
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from backend.llm_assessor import assess_topic_alignment
 
@@ -431,7 +431,10 @@ def _build_claims(
 
 
 def summarize_public_history(
-    raw_data: dict[str, Any], comparison_window_days: int = 30, llm_options: dict[str, Any] | None = None
+    raw_data: dict[str, Any],
+    comparison_window_days: int = 30,
+    llm_options: dict[str, Any] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     feed_items: list[dict[str, Any]] = raw_data.get("feed_items") or []
     profile = raw_data.get("profile") or {}
@@ -482,7 +485,13 @@ def summarize_public_history(
     signals = _collect_topic_signals(evidence)
     top_topics = [{"topic": signal.topic, "count": signal.total} for signal in signals if signal.total >= 2][:5]
     takes, uncertainty_notes = _build_takes(signals)
-    llm_assessment = assess_topic_alignment(evidence=evidence, top_topics=top_topics, takes=takes, options=llm_options)
+    llm_assessment = assess_topic_alignment(
+        evidence=evidence,
+        top_topics=top_topics,
+        takes=takes,
+        options=llm_options,
+        progress_callback=progress_callback,
+    )
     claims = _build_claims(metrics=metrics, evidence=evidence, takes=takes, handle=handle)
     comparison = _build_comparison(feed_items, comparison_window_days=max(7, min(90, comparison_window_days)))
 

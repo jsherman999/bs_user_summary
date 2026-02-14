@@ -5,7 +5,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 TOPIC_ALLOWLIST = {
     "technology",
@@ -20,6 +20,7 @@ TOPIC_ALLOWLIST = {
 }
 
 STANCE_VALUES = {"for", "against", "mixed", "unclear"}
+CORE_TOPICS = ["technology", "politics", "economy", "science", "culture", "community", "media", "sports"]
 
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-5-mini"
@@ -216,6 +217,104 @@ def _resolve_provider(config: AssessorConfig) -> tuple[str, str, str, str, dict[
     raise LLMUnavailableError(f"Unsupported provider: {provider}")
 
 
+def list_available_models(provider: str = "auto", free_only: bool = False) -> dict[str, Any]:
+    resolved = provider.strip().lower() if provider else "auto"
+    config = AssessorConfig(enabled=True, provider=resolved)
+    provider_name, model, _, _, _ = _resolve_provider(config)
+
+    if provider_name == "openai":
+        models = _list_openai_models()
+        return {
+            "provider": "openai",
+            "default_model": model,
+            "models": [{"id": model_id, "name": model_id, "free": False} for model_id in models],
+        }
+
+    if provider_name == "openrouter":
+        models = _list_openrouter_models(free_only=free_only)
+        return {
+            "provider": "openrouter",
+            "default_model": model,
+            "models": models,
+        }
+
+    raise LLMUnavailableError(f"Unsupported provider for model list: {provider_name}")
+
+
+def _list_openai_models() -> list[str]:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise LLMUnavailableError("OPENAI_API_KEY is required to load OpenAI models")
+
+    request = urllib.request.Request(
+        url="https://api.openai.com/v1/models",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise LLMUnavailableError(f"OpenAI model list failed (HTTP {exc.code}): {body}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise LLMUnavailableError(f"OpenAI model list request failed: {exc}") from exc
+
+    models = []
+    for row in payload.get("data") or []:
+        model_id = str(row.get("id") or "").strip()
+        if not model_id:
+            continue
+        if model_id.startswith(("gpt-", "o", "chatgpt-")):
+            models.append(model_id)
+
+    return sorted(set(models))
+
+
+def _list_openrouter_models(free_only: bool) -> list[dict[str, Any]]:
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    request = urllib.request.Request(
+        url="https://openrouter.ai/api/v1/models",
+        headers=headers,
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise LLMUnavailableError(f"OpenRouter model list failed (HTTP {exc.code}): {body}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise LLMUnavailableError(f"OpenRouter model list request failed: {exc}") from exc
+
+    models: list[dict[str, Any]] = []
+    for row in payload.get("data") or []:
+        model_id = str(row.get("id") or "").strip()
+        if not model_id:
+            continue
+        pricing = row.get("pricing") or {}
+        prompt_price = str(pricing.get("prompt") or "")
+        completion_price = str(pricing.get("completion") or "")
+        is_free = (":free" in model_id) or (prompt_price == "0" and completion_price == "0")
+        if free_only and not is_free:
+            continue
+        models.append(
+            {
+                "id": model_id,
+                "name": str(row.get("name") or model_id),
+                "free": is_free,
+            }
+        )
+
+    models.sort(key=lambda row: row["id"])
+    return models
+
+
 def _chunk_evidence(evidence: list[dict[str, Any]], config: AssessorConfig) -> list[list[dict[str, Any]]]:
     selected = evidence[: config.max_posts]
     chunks: list[list[dict[str, Any]]] = []
@@ -241,23 +340,61 @@ def _chunk_evidence(evidence: list[dict[str, Any]], config: AssessorConfig) -> l
     return chunks
 
 
+def _topic_hints(chunk: list[dict[str, Any]]) -> dict[str, int]:
+    hints = {topic: 0 for topic in CORE_TOPICS}
+    politics_markers = {
+        "trump",
+        "biden",
+        "democrat",
+        "republican",
+        "gop",
+        "election",
+        "vote",
+        "voting",
+        "congress",
+        "senate",
+        "policy",
+        "politics",
+        "government",
+        "supreme",
+        "court",
+        "rights",
+        "war",
+        "tax",
+        "tariff",
+        "regulation",
+    }
+    for row in chunk:
+        text = str(row.get("text") or "").lower()
+        if any(token in text for token in politics_markers):
+            hints["politics"] += 1
+    return hints
+
+
 def _build_messages(chunk: list[dict[str, Any]]) -> list[dict[str, str]]:
     system_prompt = (
         "You are a careful analyst of public social media posts. "
-        "Infer likely alignment conservatively. "
+        "Infer likely alignment conservatively for each topic. "
+        "Detect political content when posts mention politicians, parties, policy, elections, government, rights, courts, wars, or regulation. "
         "Do not invent evidence. "
         "Return strict JSON only."
     )
 
+    hints = _topic_hints(chunk)
     user_payload = {
         "task": "Assess likely alignment by topic from this post chunk.",
         "alignment_values": ["for", "against", "mixed", "unclear"],
         "topics": sorted(TOPIC_ALLOWLIST),
+        "required_topics": CORE_TOPICS,
+        "topic_hints": hints,
         "rules": [
             "Use only provided posts.",
             "If uncertain, increase unclear_count and lower confidence.",
             "evidence_ids must reference only IDs in this chunk.",
             "Counts should reflect this chunk only.",
+            "Posts may map to multiple topics.",
+            "If politics hints are non-zero, include a politics topic assessment.",
+            "Use conservative language when confidence is low.",
         ],
         "required_output_schema": {
             "overall_summary": "string",
@@ -295,7 +432,6 @@ def _request_chat_json(
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
 
@@ -315,6 +451,8 @@ def _request_chat_json(
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise LLMUnavailableError(f"LLM HTTP {exc.code}: {body}") from exc
+    except TimeoutError as exc:
+        raise LLMUnavailableError(f"LLM request timed out: {exc}") from exc
     except urllib.error.URLError as exc:
         raise LLMUnavailableError(f"LLM request failed: {exc}") from exc
 
@@ -398,6 +536,52 @@ def _normalize_chunk_assessments(
 
     summary = str(raw_result.get("overall_summary") or "").strip()[:300]
     return assessments, summary
+
+
+def _inject_missing_topic_assessments(
+    chunk: list[dict[str, Any]], assessments: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    existing = {row["topic"] for row in assessments}
+    hints = _topic_hints(chunk)
+    if hints.get("politics", 0) <= 0 or "politics" in existing:
+        return assessments
+
+    politics_ids: list[str] = []
+    markers = [
+        "trump",
+        "biden",
+        "democrat",
+        "republican",
+        "policy",
+        "election",
+        "congress",
+        "senate",
+        "government",
+        "vote",
+        "voting",
+    ]
+    for row in chunk:
+        text = str(row.get("text") or "").lower()
+        if any(token in text for token in markers):
+            row_id = str(row.get("id") or "")
+            if row_id and row_id not in politics_ids:
+                politics_ids.append(row_id)
+
+    assessments.append(
+        {
+            "topic": "politics",
+            "counts": {
+                "for": 0,
+                "against": 0,
+                "mixed": 0,
+                "unclear": max(1, int(hints.get("politics") or 1)),
+            },
+            "confidence": 0.42,
+            "evidence_ids": politics_ids[:8],
+            "reasoning": "Politics hints were present but model output had no explicit politics assessment; marked unclear.",
+        }
+    )
+    return assessments
 
 
 def _pick_alignment(counts: dict[str, int]) -> tuple[str, int]:
@@ -502,6 +686,7 @@ def assess_topic_alignment(
     top_topics: list[dict[str, Any]],
     takes: list[dict[str, Any]],
     options: dict[str, Any] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     config = AssessorConfig.from_options(options)
 
@@ -543,7 +728,41 @@ def assess_topic_alignment(
     usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     try:
-        for chunk in chunks:
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "llm-start",
+                    "message": "Starting LLM alignment analysis",
+                    "current": 0,
+                    "total": len(chunks),
+                    "meta": {
+                        "chunks_total": len(chunks),
+                        "posts_total": min(len(evidence), config.max_posts),
+                        "provider": provider,
+                        "model": model,
+                    },
+                }
+            )
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            if progress_callback:
+                posts_done = min(config.max_posts, (chunk_index - 1) * config.chunk_size)
+                progress_callback(
+                    {
+                        "stage": "llm-analyze",
+                        "message": f"Analyzing chunk {chunk_index} of {len(chunks)}",
+                        "current": chunk_index - 1,
+                        "total": len(chunks),
+                        "meta": {
+                            "posts_analyzed": posts_done,
+                            "posts_total": min(len(evidence), config.max_posts),
+                            "chunks_analyzed": chunk_index - 1,
+                            "chunks_total": len(chunks),
+                            "provider": provider,
+                            "model": model,
+                            "usage_so_far": usage_totals,
+                        },
+                    }
+                )
             messages = _build_messages(chunk)
             payload = _request_chat_json(
                 url=url,
@@ -563,21 +782,60 @@ def assess_topic_alignment(
             parsed = json.loads(content)
             valid_ids = {str(item.get("id") or "") for item in chunk}
             chunk_assessments, chunk_summary = _normalize_chunk_assessments(parsed, valid_ids)
+            chunk_assessments = _inject_missing_topic_assessments(chunk, chunk_assessments)
 
             all_assessments.extend(chunk_assessments)
             if chunk_summary:
                 all_summaries.append(chunk_summary)
 
+            if progress_callback:
+                analyzed_chunks = chunk_index
+                analyzed_posts = min(config.max_posts, analyzed_chunks * config.chunk_size)
+                progress_callback(
+                    {
+                        "stage": "llm-analyze",
+                        "message": f"LLM analyzed {analyzed_posts} of {min(len(evidence), config.max_posts)} posts",
+                        "current": analyzed_chunks,
+                        "total": len(chunks),
+                        "meta": {
+                            "posts_analyzed": analyzed_posts,
+                            "posts_total": min(len(evidence), config.max_posts),
+                            "chunks_analyzed": analyzed_chunks,
+                            "chunks_total": len(chunks),
+                            "provider": provider,
+                            "model": model,
+                            "usage_so_far": usage_totals,
+                        },
+                    }
+                )
+
         if not all_assessments:
             raise LLMUnavailableError("LLM response did not contain usable topic assessments")
 
-        return _aggregate_assessments(
+        result = _aggregate_assessments(
             chunk_assessments=all_assessments,
             chunk_summaries=all_summaries,
             usage_totals=usage_totals,
             provider=provider,
             model=model,
         )
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "llm-complete",
+                    "message": "LLM alignment completed",
+                    "current": len(chunks),
+                    "total": len(chunks),
+                    "meta": {
+                        "posts_analyzed": min(len(evidence), config.max_posts),
+                        "posts_total": min(len(evidence), config.max_posts),
+                        "usage": usage_totals,
+                        "provider": provider,
+                        "model": model,
+                    },
+                }
+            )
+        return result
     except (json.JSONDecodeError, LLMUnavailableError, KeyError, ValueError) as exc:
         return _build_fallback_assessment(
             top_topics=top_topics,

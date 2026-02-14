@@ -57,6 +57,28 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(counts["queued"], 2)
             self.assertEqual(counts["total"], 2)
 
+    def test_job_progress_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(db_path=str(Path(tmpdir) / "app.db"))
+            job_id = storage.create_job("progress.bsky.social")
+            storage.set_job_progress(
+                job_id=job_id,
+                stage="llm-analyze",
+                message="Analyzing chunk 1 of 3",
+                current=1,
+                total=3,
+                meta={"posts_analyzed": 20, "posts_total": 60},
+            )
+            job = storage.get_job(job_id)
+            self.assertIsNotNone(job)
+            assert job is not None
+            self.assertIsNotNone(job.progress)
+            assert job.progress is not None
+            self.assertEqual(job.progress["stage"], "llm-analyze")
+            self.assertEqual(job.progress["current"], 1)
+            self.assertEqual(job.progress["total"], 3)
+            self.assertEqual(job.progress["meta"]["posts_total"], 60)
+
 
 if __name__ == "__main__":
     unittest.main()

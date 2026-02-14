@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-14
+### Added
+- Detailed live job progress payloads with stage/message/percent and `x/y` counters.
+- New model discovery endpoint: `GET /api/llm/models` with OpenAI and OpenRouter support.
+- OpenRouter free-model filtering for dropdown population (`free_only=true`).
+
+### Changed
+- Frontend redesigned to a darker, higher-contrast style with upgraded status/progress UI.
+- LLM model selection now uses provider-backed dropdown data instead of a single hardcoded default.
+- LLM prompting strengthened to better capture political-topic cues and conservative stance handling.
+
 ## [0.4.0] - 2026-02-14
 ### Added
 - Pluggable `llm_assessor` module with provider support for OpenAI and OpenRouter.

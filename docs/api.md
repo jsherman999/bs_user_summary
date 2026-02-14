@@ -60,7 +60,20 @@ Response:
   "status": "running",
   "created_at": 1739550000,
   "updated_at": 1739550001,
-  "error": null
+  "error": null,
+  "progress": {
+    "stage": "llm-analyze",
+    "message": "Analyzing chunk 2 of 4",
+    "current": 1,
+    "total": 4,
+    "percent": 25.0,
+    "meta": {
+      "posts_analyzed": 20,
+      "posts_total": 80,
+      "chunks_analyzed": 1,
+      "chunks_total": 4
+    }
+  }
 }
 ```
 
@@ -88,6 +101,7 @@ Heuristic notes:
 - `takes` include stance statements only when topic mention volume is sufficient (currently 5+ sampled items).
 - low-volume topic signals are reported under `uncertainty_notes`.
 - `llm_assessment` falls back to deterministic output if provider is unavailable.
+- prompt includes explicit political-cue handling (politicians, elections, policy/government terms).
 
 Example claim object:
 ```json
@@ -158,6 +172,16 @@ Response includes:
 - `job_counts`
 - `cache_entries`
 - `request_counts`
+
+## `GET /api/llm/models`
+List selectable LLM models for provider dropdowns.
+
+Query params:
+- `provider`: `auto`, `openai`, or `openrouter`
+- `free_only`: `true|false` (useful for OpenRouter free-tier filtering)
+
+Example:
+`GET /api/llm/models?provider=openrouter&free_only=true`
 
 ## `POST /api/maintenance/cleanup`
 Delete old cache and completed/failed jobs.
