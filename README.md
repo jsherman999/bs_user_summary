@@ -31,6 +31,7 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
 - Presents all results in a mobile-first UI, including evidence and comparison panels.
 - Stores job results and cache locally in SQLite.
 - Uses SQLite WAL + busy-timeout + retry/backoff to improve stability during long-running scans.
+- Uses in-memory runtime fallbacks for active job status/summary responses if SQLite has a transient open failure.
 
 ## Project Structure
 - `backend/server.py` HTTP server and API routes

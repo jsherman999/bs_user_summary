@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import sqlite3
+import threading
 import time
 import traceback
 from collections import defaultdict
@@ -29,6 +30,37 @@ EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 FRONTEND_ROOT = Path(__file__).resolve().parent.parent / "frontend"
 START_TIME = int(time.time())
 REQUEST_COUNTS: defaultdict[str, int] = defaultdict(int)
+RUNTIME_STATE_LOCK = threading.Lock()
+RUNTIME_JOBS: dict[int, dict[str, Any]] = {}
+RUNTIME_SUMMARIES: dict[int, dict[str, Any]] = {}
+
+
+def _runtime_update_job(job_id: int, patch: dict[str, Any]) -> None:
+    now = int(time.time())
+    with RUNTIME_STATE_LOCK:
+        current = RUNTIME_JOBS.get(job_id, {})
+        merged = {**current, **patch}
+        merged["id"] = job_id
+        merged["updated_at"] = now
+        merged.setdefault("created_at", now)
+        RUNTIME_JOBS[job_id] = merged
+
+
+def _runtime_get_job(job_id: int) -> dict[str, Any] | None:
+    with RUNTIME_STATE_LOCK:
+        row = RUNTIME_JOBS.get(job_id)
+        return dict(row) if row is not None else None
+
+
+def _runtime_set_summary(job_id: int, summary: dict[str, Any]) -> None:
+    with RUNTIME_STATE_LOCK:
+        RUNTIME_SUMMARIES[job_id] = summary
+
+
+def _runtime_get_summary(job_id: int) -> dict[str, Any] | None:
+    with RUNTIME_STATE_LOCK:
+        row = RUNTIME_SUMMARIES.get(job_id)
+        return dict(row) if row is not None else None
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -156,17 +188,52 @@ def _run_job(
     comparison_window_days: int,
     llm_options: dict[str, Any],
 ) -> None:
-    STORAGE.update_job_status(job_id, "running")
+    _runtime_update_job(
+        job_id,
+        {
+            "status": "running",
+            "error": None,
+        },
+    )
+    try:
+        STORAGE.update_job_status(job_id, "running")
+    except sqlite3.OperationalError as exc:
+        LOGGER.error("SQLite operation failed setting running status for job %s: %s", job_id, exc)
 
     def _job_progress(event: dict[str, Any]) -> None:
-        STORAGE.set_job_progress(
-            job_id=job_id,
-            stage=str(event.get("stage") or "running"),
-            message=str(event.get("message") or "Running analysis"),
-            current=int(event.get("current") or 0),
-            total=int(event.get("total") or 0),
-            meta=event.get("meta") if isinstance(event.get("meta"), dict) else {},
+        stage = str(event.get("stage") or "running")
+        message = str(event.get("message") or "Running analysis")
+        current = int(event.get("current") or 0)
+        total = int(event.get("total") or 0)
+        meta = event.get("meta") if isinstance(event.get("meta"), dict) else {}
+        percent = 0.0 if total <= 0 else round(min(100.0, max(0.0, (current / total) * 100.0)), 1)
+        progress = {
+            "stage": stage,
+            "message": message,
+            "current": current,
+            "total": total,
+            "percent": percent,
+            "meta": meta,
+            "updated_at": int(time.time()),
+        }
+        _runtime_update_job(
+            job_id,
+            {
+                "status": "running" if stage != "failed" else "failed",
+                "progress": progress,
+            },
         )
+        try:
+            STORAGE.set_job_progress(
+                job_id=job_id,
+                stage=stage,
+                message=message,
+                current=current,
+                total=total,
+                meta=meta,
+            )
+        except sqlite3.OperationalError as exc:
+            LOGGER.error("SQLite operation failed writing progress for job %s: %s", job_id, exc)
 
     try:
         options = FetchOptions(max_items=max_items)
@@ -222,14 +289,42 @@ def _run_job(
             llm_options=llm_options,
             progress_callback=_job_progress,
         )
-        STORAGE.set_job_result(job_id, summary=summary, raw_data=raw_data)
+        _runtime_set_summary(job_id, summary)
+        _runtime_update_job(
+            job_id,
+            {
+                "status": "completed",
+                "error": None,
+                "progress": {
+                    "stage": "completed",
+                    "message": "Analysis completed",
+                    "current": 1,
+                    "total": 1,
+                    "percent": 100.0,
+                    "meta": {},
+                    "updated_at": int(time.time()),
+                },
+            },
+        )
+        try:
+            STORAGE.set_job_result(job_id, summary=summary, raw_data=raw_data)
+        except sqlite3.OperationalError as exc:
+            LOGGER.error("SQLite operation failed writing result for job %s: %s", job_id, exc)
         LOGGER.info("Completed job %s for @%s", job_id, handle)
     except BlueSkyError as exc:
-        STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        _runtime_update_job(job_id, {"status": "failed", "error": str(exc)})
+        try:
+            STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        except sqlite3.OperationalError as sqlite_exc:
+            LOGGER.error("SQLite operation failed setting failed status for job %s: %s", job_id, sqlite_exc)
         _job_progress({"stage": "failed", "message": str(exc), "current": 0, "total": 1})
         LOGGER.error("BlueSky error for job %s: %s", job_id, exc)
     except Exception as exc:  # noqa: BLE001
-        STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        _runtime_update_job(job_id, {"status": "failed", "error": str(exc)})
+        try:
+            STORAGE.update_job_status(job_id, "failed", error=str(exc))
+        except sqlite3.OperationalError as sqlite_exc:
+            LOGGER.error("SQLite operation failed setting failed status for job %s: %s", job_id, sqlite_exc)
         _job_progress({"stage": "failed", "message": str(exc), "current": 0, "total": 1})
         LOGGER.error("Unhandled error for job %s: %s\n%s", job_id, exc, traceback.format_exc())
 
@@ -294,23 +389,34 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not job_id_text.isdigit():
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                     return
-                job = STORAGE.get_job(int(job_id_text))
-                if job is None:
+                job_id = int(job_id_text)
+                try:
+                    job = STORAGE.get_job(job_id)
+                except sqlite3.OperationalError as exc:
+                    LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
+                    job = None
+
+                if job is not None:
+                    _json_response(
+                        self,
+                        HTTPStatus.OK,
+                        {
+                            "id": job.id,
+                            "handle": job.handle,
+                            "status": job.status,
+                            "created_at": job.created_at,
+                            "updated_at": job.updated_at,
+                            "error": job.error,
+                            "progress": job.progress,
+                        },
+                    )
+                    return
+
+                runtime_job = _runtime_get_job(job_id)
+                if runtime_job is None:
                     _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job not found"})
                     return
-                _json_response(
-                    self,
-                    HTTPStatus.OK,
-                    {
-                        "id": job.id,
-                        "handle": job.handle,
-                        "status": job.status,
-                        "created_at": job.created_at,
-                        "updated_at": job.updated_at,
-                        "error": job.error,
-                        "progress": job.progress,
-                    },
-                )
+                _json_response(self, HTTPStatus.OK, runtime_job)
                 return
 
             if path.startswith("/api/summary/"):
@@ -318,7 +424,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not job_id_text.isdigit():
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                     return
-                summary = STORAGE.get_summary(int(job_id_text))
+                job_id = int(job_id_text)
+                try:
+                    summary = STORAGE.get_summary(job_id)
+                except sqlite3.OperationalError as exc:
+                    LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
+                    summary = None
+                if summary is None:
+                    summary = _runtime_get_summary(job_id)
                 if summary is None:
                     _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                     return
@@ -332,7 +445,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if not job_id_text.isdigit():
                         _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                         return
-                    summary = STORAGE.get_summary(int(job_id_text))
+                    job_id = int(job_id_text)
+                    try:
+                        summary = STORAGE.get_summary(job_id)
+                    except sqlite3.OperationalError as exc:
+                        LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
+                        summary = None
+                    if summary is None:
+                        summary = _runtime_get_summary(job_id)
                     if summary is None:
                         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                         return
@@ -343,7 +463,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if not job_id_text.isdigit():
                         _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "Invalid job id"})
                         return
-                    summary = STORAGE.get_summary(int(job_id_text))
+                    job_id = int(job_id_text)
+                    try:
+                        summary = STORAGE.get_summary(job_id)
+                    except sqlite3.OperationalError as exc:
+                        LOGGER.error("SQLite operation failed during GET %s: %s", path, exc)
+                        summary = None
+                    if summary is None:
+                        summary = _runtime_get_summary(job_id)
                     if summary is None:
                         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Summary not available"})
                         return
@@ -413,6 +540,25 @@ class RequestHandler(BaseHTTPRequestHandler):
                 }
 
                 job_id = STORAGE.create_job(handle=handle)
+                now = int(time.time())
+                _runtime_update_job(
+                    job_id,
+                    {
+                        "handle": handle,
+                        "status": "queued",
+                        "created_at": now,
+                        "error": None,
+                        "progress": {
+                            "stage": "queued",
+                            "message": "Job queued",
+                            "current": 0,
+                            "total": 0,
+                            "percent": 0.0,
+                            "meta": {},
+                            "updated_at": now,
+                        },
+                    },
+                )
                 EXECUTOR.submit(
                     _run_job,
                     job_id,
