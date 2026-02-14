@@ -53,6 +53,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertTrue(summary["top_topics"])
         self.assertTrue(summary["claims"])
         self.assertTrue(summary["evidence"])
+        self.assertIn("llm_assessment", summary)
 
     def test_claims_are_grounded_in_evidence(self) -> None:
         raw_data = {
@@ -154,6 +155,23 @@ class AnalyzerTests(unittest.TestCase):
         summary = summarize_public_history(raw_data)
         self.assertEqual(summary["takes"], [])
         self.assertTrue(summary["uncertainty_notes"])
+
+    def test_llm_provider_none_uses_fallback(self) -> None:
+        raw_data = {
+            "handle": "fallback.bsky.social",
+            "did": "did:plc:test",
+            "profile": {"handle": "fallback.bsky.social"},
+            "feed_items": [
+                {"uri": "at://1", "created_at": "2026-02-10T10:00:00Z", "text": "technology and code", "is_reply": False},
+                {"uri": "at://2", "created_at": "2026-02-10T10:05:00Z", "text": "technology and software", "is_reply": False},
+                {"uri": "at://3", "created_at": "2026-02-10T10:10:00Z", "text": "technology and dev", "is_reply": False},
+                {"uri": "at://4", "created_at": "2026-02-10T10:15:00Z", "text": "technology and app", "is_reply": False},
+                {"uri": "at://5", "created_at": "2026-02-10T10:20:00Z", "text": "technology and ai", "is_reply": False},
+            ],
+        }
+
+        summary = summarize_public_history(raw_data, llm_options={"enabled": True, "provider": "none"})
+        self.assertEqual(summary["llm_assessment"]["source"], "deterministic_fallback")
 
 
 if __name__ == "__main__":

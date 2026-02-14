@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from backend.llm_assessor import assess_topic_alignment
+
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
 URL_RE = re.compile(r"https?://\S+")
 MENTION_RE = re.compile(r"@[A-Za-z0-9._-]+")
@@ -428,7 +430,9 @@ def _build_claims(
     return [claim for claim in claims if claim.get("evidence_ids")]
 
 
-def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: int = 30) -> dict[str, Any]:
+def summarize_public_history(
+    raw_data: dict[str, Any], comparison_window_days: int = 30, llm_options: dict[str, Any] | None = None
+) -> dict[str, Any]:
     feed_items: list[dict[str, Any]] = raw_data.get("feed_items") or []
     profile = raw_data.get("profile") or {}
     handle = raw_data.get("handle") or ""
@@ -478,6 +482,7 @@ def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: i
     signals = _collect_topic_signals(evidence)
     top_topics = [{"topic": signal.topic, "count": signal.total} for signal in signals if signal.total >= 2][:5]
     takes, uncertainty_notes = _build_takes(signals)
+    llm_assessment = assess_topic_alignment(evidence=evidence, top_topics=top_topics, takes=takes, options=llm_options)
     claims = _build_claims(metrics=metrics, evidence=evidence, takes=takes, handle=handle)
     comparison = _build_comparison(feed_items, comparison_window_days=max(7, min(90, comparison_window_days)))
 
@@ -491,6 +496,12 @@ def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: i
             direction = comparison["delta"]["activity_direction"]
             summary_text_parts.append(
                 f"Compared with the prior {comparison['window_days']}-day window, activity is {direction}."
+            )
+        llm_alignments = llm_assessment.get("topic_alignments") or []
+        if llm_assessment.get("source") == "llm" and llm_alignments:
+            top_alignment = llm_alignments[0]
+            summary_text_parts.append(
+                f"LLM alignment signal is strongest on {top_alignment['topic']} ({top_alignment['alignment']})."
             )
         if not takes:
             summary_text_parts.append("Topic-specific takes are limited due to weak or sparse signals.")
@@ -508,6 +519,7 @@ def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: i
         "top_topics": top_topics,
         "takes": takes,
         "claims": claims,
+        "llm_assessment": llm_assessment,
         "evidence": evidence,
         "comparison": comparison,
         "uncertainty_notes": uncertainty_notes,

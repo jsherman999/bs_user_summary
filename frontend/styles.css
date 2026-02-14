@@ -61,12 +61,14 @@ label {
 }
 
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 1rem;
+  background: #fff;
 }
 
 .checkbox-row {

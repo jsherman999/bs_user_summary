@@ -14,6 +14,10 @@ A mobile-friendly web app for summarizing a BlueSky user's public post and reply
   - claim objects with confidence and evidence IDs
   - topic takes with uncertainty notes
   - honesty notes about data boundaries
+- Optional LLM alignment layer (OpenAI/OpenRouter) with deterministic fallback:
+  - per-topic likely alignment (`for`, `against`, `mixed`, `unclear`)
+  - usage accounting (`input_tokens`, `output_tokens`)
+  - automatic fallback when provider/key/model is unavailable
 - Adds time-window comparison (recent window vs prior window).
 - Supports summary export in JSON and Markdown formats.
 - Exposes observability stats and retention cleanup endpoints.
@@ -83,6 +87,21 @@ Details: `docs/launchd.md`
 - `GET /api/user/raw?handle=alice.bsky.social`
 
 See `docs/api.md` for full payload examples.
+
+## LLM Configuration
+Request-level options on `POST /api/analyze`:
+- `enable_llm` boolean (default `true`)
+- `llm_provider` one of `auto`, `openai`, `openrouter`, `none`
+- `llm_model` optional explicit model name
+- `llm_max_posts` integer `25..500` (default `500`)
+
+Environment options:
+- `BS_LLM_ENABLED=true|false`
+- `BS_LLM_PROVIDER=auto|openai|openrouter|none`
+- `BS_LLM_MODEL=<model-name>`
+- `BS_LLM_MAX_POSTS=500`
+- `OPENAI_API_KEY=<key>` for `openai`
+- `OPENROUTER_API_KEY=<key>` for `openrouter`
 
 ## Tests
 ```bash

@@ -20,7 +20,11 @@ Request body:
   "max_items": 200,
   "comparison_window_days": 30,
   "use_cache": true,
-  "cache_age_seconds": 900
+  "cache_age_seconds": 900,
+  "enable_llm": true,
+  "llm_provider": "auto",
+  "llm_model": "",
+  "llm_max_posts": 500
 }
 ```
 
@@ -29,6 +33,8 @@ Notes:
 - `max_items` clamped to `25..500`.
 - `comparison_window_days` clamped to `7..90`.
 - `cache_age_seconds` clamped to `60..86400`.
+- `llm_provider` supported values: `auto`, `openai`, `openrouter`, `none`.
+- `llm_max_posts` clamped to `25..500`.
 
 Response:
 ```json
@@ -36,7 +42,10 @@ Response:
   "job_id": 1,
   "status": "queued",
   "handle": "alice.bsky.social",
-  "comparison_window_days": 30
+  "comparison_window_days": 30,
+  "llm_enabled": true,
+  "llm_provider": "auto",
+  "llm_model": null
 }
 ```
 
@@ -67,6 +76,7 @@ Phase 3 response sections:
 - `top_topics`
 - `takes`
 - `claims`
+- `llm_assessment`
 - `evidence`
 - `comparison`
 - `uncertainty_notes`
@@ -77,6 +87,7 @@ Heuristic notes:
 - `top_terms` excludes common platform/URL/identity noise tokens.
 - `takes` include stance statements only when topic mention volume is sufficient (currently 5+ sampled items).
 - low-volume topic signals are reported under `uncertainty_notes`.
+- `llm_assessment` falls back to deterministic output if provider is unavailable.
 
 Example claim object:
 ```json
@@ -98,6 +109,27 @@ Example evidence object:
   "text": "post text",
   "is_reply": false,
   "topics": ["technology"]
+}
+```
+
+Example LLM assessment object:
+```json
+{
+  "enabled": true,
+  "source": "llm",
+  "provider": "openai",
+  "model": "gpt-5-mini",
+  "status": "ok",
+  "topic_alignments": [
+    {
+      "topic": "technology",
+      "alignment": "mixed",
+      "confidence": 0.68,
+      "mention_count": 28,
+      "evidence_ids": ["ev5", "ev12", "ev33"]
+    }
+  ],
+  "usage": { "input_tokens": 34120, "output_tokens": 5220, "total_tokens": 39340 }
 }
 ```
 

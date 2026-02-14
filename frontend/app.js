@@ -7,6 +7,8 @@ const metricsGrid = document.getElementById("metrics-grid");
 const topicsList = document.getElementById("topics-list");
 const termsList = document.getElementById("terms-list");
 const claimsList = document.getElementById("claims-list");
+const llmStatus = document.getElementById("llm-status");
+const llmAlignmentsList = document.getElementById("llm-alignments-list");
 const takesList = document.getElementById("takes-list");
 const comparisonList = document.getElementById("comparison-list");
 const uncertaintyList = document.getElementById("uncertainty-list");
@@ -118,6 +120,29 @@ function renderComparison(comparison) {
   renderList(comparisonList, lines, (line) => line, "Not enough timestamped data for comparison.");
 }
 
+function renderLlmAssessment(assessment) {
+  if (!assessment) {
+    llmStatus.textContent = "No LLM assessment data in summary.";
+    renderList(llmAlignmentsList, [], (line) => line, "No LLM alignments available.");
+    return;
+  }
+
+  const source = assessment.source || "unknown";
+  const status = assessment.status || "unknown";
+  const provider = assessment.provider || "n/a";
+  const model = assessment.model || "default";
+  const usage = assessment.usage || {};
+
+  llmStatus.textContent = `Source: ${source} | Status: ${status} | Provider: ${provider} | Model: ${model} | Tokens in/out: ${usage.input_tokens || 0}/${usage.output_tokens || 0}`;
+  renderList(
+    llmAlignmentsList,
+    assessment.topic_alignments || [],
+    (row) =>
+      `${row.topic}: ${row.alignment} (confidence ${row.confidence}, mentions ${row.mention_count}; evidence: ${(row.evidence_ids || []).join(", ")})`,
+    "No LLM alignments available."
+  );
+}
+
 async function getJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -159,6 +184,10 @@ form.addEventListener("submit", async (event) => {
   const maxItems = Number(document.getElementById("max_items").value || 200);
   const comparisonWindowDays = Number(document.getElementById("comparison_window_days").value || 30);
   const useCache = document.getElementById("use_cache").checked;
+  const enableLlm = document.getElementById("enable_llm").checked;
+  const llmProvider = document.getElementById("llm_provider").value;
+  const llmModel = document.getElementById("llm_model").value.trim();
+  const llmMaxPosts = Number(document.getElementById("llm_max_posts").value || 500);
 
   try {
     const start = await getJson("/api/analyze", {
@@ -168,6 +197,10 @@ form.addEventListener("submit", async (event) => {
         max_items: maxItems,
         comparison_window_days: comparisonWindowDays,
         use_cache: useCache,
+        enable_llm: enableLlm,
+        llm_provider: llmProvider,
+        llm_model: llmModel,
+        llm_max_posts: llmMaxPosts,
       }),
     });
     currentJobId = start.job_id;
@@ -191,6 +224,7 @@ form.addEventListener("submit", async (event) => {
       (claim) => `${claim.text} (confidence ${claim.confidence}; evidence: ${(claim.evidence_ids || []).join(", ")})`,
       "No grounded claims available."
     );
+    renderLlmAssessment(summary.llm_assessment || null);
     renderList(
       takesList,
       summary.takes || [],

@@ -69,6 +69,7 @@ def _summary_to_markdown(summary: dict) -> str:
     metrics = summary.get("metrics") or {}
     claims = summary.get("claims") or []
     takes = summary.get("takes") or []
+    llm_assessment = summary.get("llm_assessment") or {}
     uncertainty = summary.get("uncertainty_notes") or []
     comparison = summary.get("comparison") or {}
 
@@ -107,6 +108,19 @@ def _summary_to_markdown(summary: dict) -> str:
     else:
         lines.append("- No strong topic takes in sample.")
 
+    lines.extend(["", "## LLM Alignment"])
+    llm_alignments = llm_assessment.get("topic_alignments") or []
+    lines.append(
+        f"- Source: {llm_assessment.get('source', 'unknown')} ({llm_assessment.get('provider', 'n/a')}:{llm_assessment.get('model', 'default')})"
+    )
+    if llm_alignments:
+        for row in llm_alignments[:6]:
+            lines.append(
+                f"- {row.get('topic')}: {row.get('alignment')} (confidence {row.get('confidence')}, mentions {row.get('mention_count')})"
+            )
+    else:
+        lines.append("- No LLM alignments available.")
+
     lines.extend(["", "## Comparison"])
     if comparison:
         recent = comparison.get("recent_window") or {}
@@ -137,6 +151,7 @@ def _run_job(
     use_cache: bool,
     cache_age_s: int,
     comparison_window_days: int,
+    llm_options: dict[str, Any],
 ) -> None:
     STORAGE.update_job_status(job_id, "running")
     try:
@@ -152,7 +167,9 @@ def _run_job(
             raw_data = CLIENT.fetch_public_history(handle, options=options)
             STORAGE.set_user_cache(handle, raw_data.get("did") or "", raw_data)
 
-        summary = summarize_public_history(raw_data, comparison_window_days=comparison_window_days)
+        summary = summarize_public_history(
+            raw_data, comparison_window_days=comparison_window_days, llm_options=llm_options
+        )
         STORAGE.set_job_result(job_id, summary=summary, raw_data=raw_data)
         LOGGER.info("Completed job %s for @%s", job_id, handle)
     except BlueSkyError as exc:
@@ -297,9 +314,30 @@ class RequestHandler(BaseHTTPRequestHandler):
             cache_age_s = max(60, min(cache_age_s, 86400))
             comparison_window_days = int(body.get("comparison_window_days") or 30)
             comparison_window_days = max(7, min(comparison_window_days, 90))
+            llm_enabled = bool(body.get("enable_llm", True))
+            llm_provider = str(body.get("llm_provider") or os.getenv("BS_LLM_PROVIDER", "auto")).strip().lower()
+            llm_model = str(body.get("llm_model") or os.getenv("BS_LLM_MODEL", "")).strip()
+            llm_max_posts = int(body.get("llm_max_posts") or os.getenv("BS_LLM_MAX_POSTS", "500"))
+            llm_max_posts = max(25, min(llm_max_posts, 500))
+
+            llm_options = {
+                "enabled": llm_enabled,
+                "provider": llm_provider,
+                "model": llm_model,
+                "max_posts": llm_max_posts,
+            }
 
             job_id = STORAGE.create_job(handle=handle)
-            EXECUTOR.submit(_run_job, job_id, handle, max_items, use_cache, cache_age_s, comparison_window_days)
+            EXECUTOR.submit(
+                _run_job,
+                job_id,
+                handle,
+                max_items,
+                use_cache,
+                cache_age_s,
+                comparison_window_days,
+                llm_options,
+            )
 
             _json_response(
                 self,
@@ -309,6 +347,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "status": "queued",
                     "handle": handle,
                     "comparison_window_days": comparison_window_days,
+                    "llm_enabled": llm_enabled,
+                    "llm_provider": llm_provider,
+                    "llm_model": llm_model or None,
                 },
             )
             return

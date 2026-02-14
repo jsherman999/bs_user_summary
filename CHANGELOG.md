@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-14
+### Added
+- Pluggable `llm_assessor` module with provider support for OpenAI and OpenRouter.
+- Chunked LLM analysis for large scans (up to 500 posts) with token usage accounting.
+- Guaranteed deterministic fallback alignment when LLM provider/key/model is unavailable.
+- API request controls for LLM provider/model/enabled/max posts.
+- Frontend controls and rendering for LLM alignment results.
+
 ## [0.3.1] - 2026-02-14
 ### Added
 - macOS `launchd` service automation with `install/start/stop/restart/status/logs/uninstall` commands.

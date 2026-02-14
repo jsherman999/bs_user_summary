@@ -29,6 +29,25 @@
             Reuse recent cached data when available
           </label>
 
+          <label class="checkbox-row">
+            <input id="enable_llm" name="enable_llm" type="checkbox" checked />
+            Enable LLM alignment assessment
+          </label>
+
+          <label for="llm_provider">LLM provider</label>
+          <select id="llm_provider" name="llm_provider">
+            <option value="auto" selected>auto</option>
+            <option value="openai">openai</option>
+            <option value="openrouter">openrouter</option>
+            <option value="none">none (deterministic only)</option>
+          </select>
+
+          <label for="llm_model">LLM model (optional)</label>
+          <input id="llm_model" name="llm_model" type="text" placeholder="gpt-5-mini" />
+
+          <label for="llm_max_posts">LLM max posts (25-500)</label>
+          <input id="llm_max_posts" name="llm_max_posts" type="number" min="25" max="500" value="500" />
+
           <button type="submit">Analyze Public History</button>
         </form>
       </section>
@@ -54,6 +73,10 @@
 
         <h3>Claims</h3>
         <ul id="claims-list"></ul>
+
+        <h3>LLM Alignment</h3>
+        <p id="llm-status"></p>
+        <ul id="llm-alignments-list"></ul>
 
         <h3>Topic Takes</h3>
         <ul id="takes-list"></ul>
