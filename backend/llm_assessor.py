@@ -723,11 +723,11 @@ def assess_topic_alignment(
             model=model,
         )
 
-    all_assessments: list[dict[str, Any]] = []
-    all_summaries: list[str] = []
-    usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    def _run_for_model(active_model: str) -> dict[str, Any]:
+        all_assessments: list[dict[str, Any]] = []
+        all_summaries: list[str] = []
+        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
-    try:
         if progress_callback:
             progress_callback(
                 {
@@ -739,10 +739,11 @@ def assess_topic_alignment(
                         "chunks_total": len(chunks),
                         "posts_total": min(len(evidence), config.max_posts),
                         "provider": provider,
-                        "model": model,
+                        "model": active_model,
                     },
                 }
             )
+
         for chunk_index, chunk in enumerate(chunks, start=1):
             if progress_callback:
                 posts_done = min(config.max_posts, (chunk_index - 1) * config.chunk_size)
@@ -758,7 +759,7 @@ def assess_topic_alignment(
                             "chunks_analyzed": chunk_index - 1,
                             "chunks_total": len(chunks),
                             "provider": provider,
-                            "model": model,
+                            "model": active_model,
                             "usage_so_far": usage_totals,
                         },
                     }
@@ -767,7 +768,7 @@ def assess_topic_alignment(
             payload = _request_chat_json(
                 url=url,
                 api_key=api_key,
-                model=model,
+                model=active_model,
                 messages=messages,
                 timeout_s=config.timeout_s,
                 temperature=config.temperature,
@@ -803,7 +804,7 @@ def assess_topic_alignment(
                             "chunks_analyzed": analyzed_chunks,
                             "chunks_total": len(chunks),
                             "provider": provider,
-                            "model": model,
+                            "model": active_model,
                             "usage_so_far": usage_totals,
                         },
                     }
@@ -817,7 +818,7 @@ def assess_topic_alignment(
             chunk_summaries=all_summaries,
             usage_totals=usage_totals,
             provider=provider,
-            model=model,
+            model=active_model,
         )
         if progress_callback:
             progress_callback(
@@ -831,16 +832,36 @@ def assess_topic_alignment(
                         "posts_total": min(len(evidence), config.max_posts),
                         "usage": usage_totals,
                         "provider": provider,
-                        "model": model,
+                        "model": active_model,
                     },
                 }
             )
         return result
+
+    try:
+        return _run_for_model(model)
     except (json.JSONDecodeError, LLMUnavailableError, KeyError, ValueError) as exc:
+        message = str(exc)
+        if (
+            provider == "openai"
+            and model != DEFAULT_OPENAI_MODEL
+            and "not a chat model" in message.lower()
+        ):
+            try:
+                fallback_result = _run_for_model(DEFAULT_OPENAI_MODEL)
+                fallback_result["model_fallback"] = {
+                    "requested_model": model,
+                    "actual_model": DEFAULT_OPENAI_MODEL,
+                    "reason": message,
+                }
+                return fallback_result
+            except (json.JSONDecodeError, LLMUnavailableError, KeyError, ValueError) as fallback_exc:
+                message = f"{message}; fallback model also failed: {fallback_exc}"
+
         return _build_fallback_assessment(
             top_topics=top_topics,
             takes=takes,
-            reason=f"LLM unavailable: {exc}",
+            reason=f"LLM unavailable: {message}",
             status="fallback",
             provider=provider,
             model=model,

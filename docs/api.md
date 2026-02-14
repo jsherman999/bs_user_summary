@@ -147,6 +147,12 @@ Example LLM assessment object:
 }
 ```
 
+Model compatibility note:
+- If a selected OpenAI model is not compatible with `chat/completions`, the service automatically retries with a chat-compatible default model and returns:
+  - `llm_assessment.model_fallback.requested_model`
+  - `llm_assessment.model_fallback.actual_model`
+  - `llm_assessment.model_fallback.reason`
+
 Example comparison object:
 ```json
 {

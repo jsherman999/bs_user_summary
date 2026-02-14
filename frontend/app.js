@@ -141,8 +141,12 @@ function renderLlmAssessment(assessment) {
   const provider = assessment.provider || "n/a";
   const model = assessment.model || "default";
   const usage = assessment.usage || {};
+  const fallbackReason = assessment.fallback_reason ? ` | Fallback reason: ${assessment.fallback_reason}` : "";
+  const modelFallback = assessment.model_fallback
+    ? ` | Model fallback: ${assessment.model_fallback.requested_model} -> ${assessment.model_fallback.actual_model}`
+    : "";
 
-  llmStatus.textContent = `Source: ${source} | Status: ${status} | Provider: ${provider} | Model: ${model} | Tokens in/out: ${usage.input_tokens || 0}/${usage.output_tokens || 0}`;
+  llmStatus.textContent = `Source: ${source} | Status: ${status} | Provider: ${provider} | Model: ${model} | Tokens in/out: ${usage.input_tokens || 0}/${usage.output_tokens || 0}${modelFallback}${fallbackReason}`;
   renderList(
     llmAlignmentsList,
     assessment.topic_alignments || [],

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- OpenAI non-chat models (for example `gpt-5.2-pro`) now auto-retry on a chat-compatible model instead of immediately returning deterministic fallback.
+- Frontend LLM status now shows explicit fallback/model-fallback reason text.
+
 ## [0.5.0] - 2026-02-14
 ### Added
 - Detailed live job progress payloads with stage/message/percent and `x/y` counters.
