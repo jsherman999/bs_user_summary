@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-14
+### Added
+- macOS `launchd` service automation with `install/start/stop/restart/status/logs/uninstall` commands.
+- launchd documentation for boot-time LAN hosting setup.
+
+### Changed
+- launchd install now auto-selects shell `python3` and validates Python 3.11+ before service registration.
+- Tuned analyzer heuristics using real-handle end-to-end output:
+  - top-term filtering now removes URL/mention/platform/identity noise.
+  - topic takes now require higher signal volume before stance claims.
+  - low-signal topics move to uncertainty notes instead of stance claims.
+
 ## [0.3.0] - 2026-02-14
 ### Added
 - Comparison-window analysis in summary output (recent vs prior period deltas).

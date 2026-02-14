@@ -47,6 +47,29 @@ To find LAN IP on macOS:
 ipconfig getifaddr en0
 ```
 
+## Auto-Start On macOS (launchd)
+Install and start a background service that binds to LAN:
+
+```bash
+./launchd/control.sh install
+```
+
+Common service commands:
+
+```bash
+./launchd/control.sh status
+./launchd/control.sh logs
+./launchd/control.sh restart
+./launchd/control.sh uninstall
+```
+
+Optional environment overrides before install:
+- `BS_APP_HOST` (default `0.0.0.0`)
+- `BS_APP_PORT` (default `8080`)
+- `PYTHON_BIN` (default: current `python3` in your shell `PATH`, must be Python 3.11+)
+
+Details: `docs/launchd.md`
+
 ## API Endpoints (Phase 3)
 - `GET /api/health`
 - `POST /api/analyze`

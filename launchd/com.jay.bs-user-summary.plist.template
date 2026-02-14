@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.jay.bs-user-summary</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/zsh</string>
+      <string>-lc</string>
+      <string>cd __WORKDIR__ &amp;&amp; __PYTHON_BIN__ -m backend.server --host __HOST__ --port __PORT__</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKDIR__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__STDOUT_LOG__</string>
+
+    <key>StandardErrorPath</key>
+    <string>__STDERR_LOG__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PYTHONUNBUFFERED</key>
+      <string>1</string>
+    </dict>
+  </dict>
+</plist>

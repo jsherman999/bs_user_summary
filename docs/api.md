@@ -73,6 +73,11 @@ Phase 3 response sections:
 - `honesty_notes`
 - `summary_text`
 
+Heuristic notes:
+- `top_terms` excludes common platform/URL/identity noise tokens.
+- `takes` include stance statements only when topic mention volume is sufficient (currently 5+ sampled items).
+- low-volume topic signals are reported under `uncertainty_notes`.
+
 Example claim object:
 ```json
 {

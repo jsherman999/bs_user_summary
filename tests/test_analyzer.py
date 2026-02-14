@@ -110,6 +110,51 @@ class AnalyzerTests(unittest.TestCase):
         assert summary["comparison"] is not None
         self.assertEqual(summary["comparison"]["window_days"], 20)
 
+    def test_top_terms_filter_platform_noise_and_mentions(self) -> None:
+        raw_data = {
+            "handle": "noise.bsky.social",
+            "did": "did:plc:test",
+            "profile": {"handle": "noise.bsky.social"},
+            "feed_items": [
+                {
+                    "uri": "at://1",
+                    "created_at": "2026-02-10T10:00:00Z",
+                    "text": "https://bsky.app/profile/noise.bsky.social/post/abc nice thread @someone",
+                    "is_reply": False,
+                },
+                {
+                    "uri": "at://2",
+                    "created_at": "2026-02-10T10:05:00Z",
+                    "text": "Real topic value security security",
+                    "is_reply": False,
+                },
+            ],
+        }
+
+        summary = summarize_public_history(raw_data)
+        terms = {entry["term"] for entry in summary["top_terms"]}
+        self.assertIn("security", terms)
+        self.assertNotIn("bsky", terms)
+        self.assertNotIn("app", terms)
+        self.assertNotIn("profile", terms)
+
+    def test_takes_require_minimum_signal_volume(self) -> None:
+        raw_data = {
+            "handle": "sparse.bsky.social",
+            "did": "did:plc:test",
+            "profile": {"handle": "sparse.bsky.social"},
+            "feed_items": [
+                {"uri": "at://1", "created_at": "2026-02-10T10:00:00Z", "text": "policy", "is_reply": False},
+                {"uri": "at://2", "created_at": "2026-02-10T10:05:00Z", "text": "policy", "is_reply": False},
+                {"uri": "at://3", "created_at": "2026-02-10T10:10:00Z", "text": "policy", "is_reply": False},
+                {"uri": "at://4", "created_at": "2026-02-10T10:15:00Z", "text": "policy", "is_reply": False},
+            ],
+        }
+
+        summary = summarize_public_history(raw_data)
+        self.assertEqual(summary["takes"], [])
+        self.assertTrue(summary["uncertainty_notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

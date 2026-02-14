@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
+URL_RE = re.compile(r"https?://\S+")
+MENTION_RE = re.compile(r"@[A-Za-z0-9._-]+")
 
 STOPWORDS = {
     "a",
@@ -54,10 +56,71 @@ STOPWORDS = {
     "with",
     "you",
     "your",
+    "not",
+    "but",
+    "all",
+    "will",
+    "what",
+    "who",
+    "one",
+    "its",
+    "it's",
+    "im",
+    "i'm",
+    "dont",
+    "don't",
+    "cant",
+    "can't",
+    "just",
+    "get",
+    "got",
+    "also",
+    "really",
+    "than",
+    "then",
+    "there",
+    "their",
+    "about",
+    "into",
+    "out",
+    "now",
+    "still",
+    "more",
+    "some",
+    "any",
+    "very",
+    "new",
+    "would",
+    "could",
+    "should",
+    "can",
+    "because",
+    "where",
+    "way",
+    "right",
+    "like",
+}
+
+PLATFORM_NOISE_TOKENS = {
+    "app",
+    "bsky",
+    "bluesky",
+    "profile",
+    "social",
+    "com",
+    "http",
+    "https",
+    "www",
+    "did",
+    "atproto",
+    "xrpc",
+    "cid",
+    "uri",
+    "plc",
 }
 
 TOPIC_KEYWORDS = {
-    "technology": {"tech", "software", "ai", "code", "coding", "dev", "developer", "programming", "app"},
+    "technology": {"tech", "software", "ai", "code", "coding", "dev", "developer", "programming"},
     "politics": {"policy", "election", "politics", "government", "senate", "congress", "vote", "voting"},
     "sports": {"sports", "game", "team", "match", "season", "playoffs", "score"},
     "media": {"movie", "film", "show", "music", "album", "book", "podcast", "series"},
@@ -73,8 +136,6 @@ POSITIVE_WORDS = {
     "support",
     "supported",
     "supporting",
-    "like",
-    "liked",
     "awesome",
 }
 
@@ -91,6 +152,8 @@ NEGATIVE_WORDS = {
     "frustrated",
     "problem",
 }
+
+MIN_TAKE_SIGNAL = 5
 
 
 @dataclass(slots=True)
@@ -112,12 +175,39 @@ def _parse_timestamp(value: str | None) -> dt.datetime | None:
 
 
 def _tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text)]
+    cleaned = URL_RE.sub(" ", text)
+    cleaned = MENTION_RE.sub(" ", cleaned)
+    return [token.lower() for token in TOKEN_RE.findall(cleaned)]
 
 
-def _pick_top_terms(posts: list[dict[str, Any]], handle: str, top_n: int = 15) -> list[dict[str, Any]]:
+def _identity_roots(handle: str, profile: dict[str, Any] | None) -> tuple[set[str], set[str]]:
+    blocked_tokens: set[str] = set()
+    blocked_prefixes: set[str] = set()
+
+    handle_parts = [part.lower() for part in re.split(r"[^A-Za-z0-9]+", handle) if len(part) > 1]
+    for part in handle_parts:
+        blocked_tokens.add(part)
+        if len(part) >= 4:
+            blocked_prefixes.add(part[:4])
+
+    if profile:
+        display_name = profile.get("display_name") or profile.get("displayName") or ""
+        if isinstance(display_name, str):
+            for token in _tokenize(display_name):
+                blocked_tokens.add(token)
+                if len(token) >= 4:
+                    blocked_prefixes.add(token[:4])
+
+    return blocked_tokens, blocked_prefixes
+
+
+def _pick_top_terms(
+    posts: list[dict[str, Any]], handle: str, profile: dict[str, Any] | None = None, top_n: int = 15
+) -> list[dict[str, Any]]:
     counts: collections.Counter[str] = collections.Counter()
-    blocked = {handle, handle.split(".")[0]}
+    blocked = {handle, handle.split(".")[0], *PLATFORM_NOISE_TOKENS}
+    identity_tokens, identity_prefixes = _identity_roots(handle, profile)
+    blocked.update(identity_tokens)
 
     for post in posts:
         text = post.get("text") or ""
@@ -125,6 +215,8 @@ def _pick_top_terms(posts: list[dict[str, Any]], handle: str, top_n: int = 15) -
             if token in STOPWORDS:
                 continue
             if token in blocked:
+                continue
+            if any(token.startswith(prefix) for prefix in identity_prefixes):
                 continue
             if len(token) <= 2:
                 continue
@@ -187,22 +279,26 @@ def _build_takes(signals: list[TopicSignal]) -> tuple[list[dict[str, Any]], list
     uncertainty_notes: list[str] = []
 
     for signal in signals[:5]:
-        if signal.total < 2:
+        if signal.total < MIN_TAKE_SIGNAL:
             uncertainty_notes.append(
-                f"{signal.topic} appears in the sample, but there are fewer than 2 mentions, so stance is uncertain."
+                f"{signal.topic} appears in the sample, but there are fewer than {MIN_TAKE_SIGNAL} mentions, so stance is uncertain."
             )
             continue
 
-        if signal.positive >= signal.negative + 2:
-            stance = "mostly supportive"
-        elif signal.negative >= signal.positive + 2:
-            stance = "mostly critical"
-        elif signal.positive == 0 and signal.negative == 0:
+        balance = signal.positive - signal.negative
+        if signal.positive == 0 and signal.negative == 0:
             stance = "no clear sentiment"
+        elif balance >= 2:
+            stance = "mostly supportive"
+        elif balance <= -2:
+            stance = "mostly critical"
         else:
             stance = "mixed"
 
-        confidence = min(0.95, round(0.35 + (signal.total * 0.08) + abs(signal.positive - signal.negative) * 0.03, 2))
+        confidence = 0.35 + min(signal.total, 12) * 0.03 + min(abs(balance), 6) * 0.04
+        if stance in {"mixed", "no clear sentiment"}:
+            confidence = min(confidence, 0.7)
+        confidence = min(0.9, round(confidence, 2))
         statement = f"On {signal.topic}, sampled posts are {stance}."
 
         takes.append(
@@ -377,10 +473,10 @@ def summarize_public_history(raw_data: dict[str, Any], comparison_window_days: i
         "total_visible_reactions": total_reactions,
     }
 
-    top_terms = _pick_top_terms(feed_items, handle=handle)
+    top_terms = _pick_top_terms(feed_items, handle=handle, profile=profile)
     evidence = _build_evidence(feed_items)
     signals = _collect_topic_signals(evidence)
-    top_topics = [{"topic": signal.topic, "count": signal.total} for signal in signals[:5]]
+    top_topics = [{"topic": signal.topic, "count": signal.total} for signal in signals if signal.total >= 2][:5]
     takes, uncertainty_notes = _build_takes(signals)
     claims = _build_claims(metrics=metrics, evidence=evidence, takes=takes, handle=handle)
     comparison = _build_comparison(feed_items, comparison_window_days=max(7, min(90, comparison_window_days)))
